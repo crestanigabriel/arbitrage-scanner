@@ -1,0 +1,21 @@
+# Tool binaries (golangci-lint is downloaded here by `make tools`)
+bin/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage*
+
+# Go
+*.out
+*.test
+
+# Local env / editors / OS
+.env
+.idea/
+.vscode/
+.DS_Store

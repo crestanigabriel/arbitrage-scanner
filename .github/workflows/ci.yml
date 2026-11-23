@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      python: ${{ steps.filter.outputs.python }}
+      compose: ${{ steps.filter.outputs.compose }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            go:
+              - 'services/ingestor/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            python:
+              - 'services/detector/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            compose:
+              - 'deploy/**'
+              - '.github/workflows/ci.yml'
+
+  go:
+    name: Go (ingestor)
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: services/ingestor/go.mod
+          cache-dependency-path: services/ingestor/go.mod
+      - name: Lint
+        run: make lint-go
+      - name: Test
+        run: make test-go
+
+  python:
+    name: Python (detector)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          working-directory: services/detector
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: services/detector
+        run: uv sync --locked
+      - name: Lint
+        run: make lint-py
+      - name: Test
+        run: make test-py
+
+  compose:
+    name: Compose config
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate docker-compose.yml
+        run: docker compose -f deploy/docker-compose.yml config --quiet
