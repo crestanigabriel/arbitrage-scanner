@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  commits:
+    name: Commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check Conventional Commits
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A new branch has no previous commit, and after a force push the old one may be gone,
+          # so in those cases the whole history is checked.
+          if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            make check-commits RANGE="$BASE..$HEAD"
+          else
+            make check-commits RANGE="$HEAD"
+          fi
+
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
