@@ -7,7 +7,7 @@ Kraken and Coinbase, normalizes them and publishes them on **NATS JetStream** as
 opportunities and processing stats in **PostgreSQL + TimescaleDB**. **Prometheus + Loki + Grafana**
 show metrics, logs and data. There is no custom frontend: Grafana is the screen.
 
-The repo currently has only `docs/ARCHITECTURE_PRINCIPLES.md`, and its rules are binding:
+The rules in `docs/ARCHITECTURE_PRINCIPLES.md` are binding:
 - composition over inheritance
 - depend on interfaces
 - constructor injection, with all wiring in a single composition root per service (`cmd/ingestor/main.go`, `detector/main.py`)

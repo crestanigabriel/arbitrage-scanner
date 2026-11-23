@@ -1,5 +1,17 @@
 # Project instructions
 
+## Architecture rules
+
+The rules in [ARCHITECTURE_PRINCIPLES.md](docs/ARCHITECTURE_PRINCIPLES.md) are binding. Check every
+change against its checklist.
+
+@docs/ARCHITECTURE_PRINCIPLES.md
+
+## Working mode
+
+- Work one milestone of [ROADMAP.md](docs/ROADMAP.md) at a time. Each milestone is reviewed
+  before the next one starts.
+
 ## Commits
 
 - Subjects follow [Conventional Commits](https://www.conventionalcommits.org):
