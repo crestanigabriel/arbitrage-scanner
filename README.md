@@ -1,10 +1,12 @@
 # arbitrage-scanner
 
-Real-time cross-exchange crypto arbitrage scanner. A **Go ingestor** streams live order books from
-Kraken and Coinbase and publishes them to **NATS JetStream** as Protobuf. A **Python detector**
-finds arbitrage after fees and depth, and **Grafana** shows the pipeline and the opportunities.
+Real-time cross-exchange crypto arbitrage scanner. A **Go ingestor** maintains the public order
+books of Kraken and Coinbase and publishes the top of each book (up to 100 levels, throttled) and
+every trade to **NATS JetStream** as Protobuf. A **Python detector** finds arbitrage after fees
+and depth, and **Grafana** shows the pipeline and the opportunities.
 
-> **Status:** M0 — foundations. See the [roadmap](docs/ROADMAP.md) for what comes next.
+> **Status:** M1 — shared Protobuf contracts. See the [roadmap](docs/ROADMAP.md) for what comes
+> next.
 
 ## Prerequisites
 
@@ -13,8 +15,9 @@ finds arbitrage after fees and depth, and **Grafana** shows the pipeline and the
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2+
 - GNU Make (the 3.81 that ships with macOS is fine)
 
-`golangci-lint` is downloaded automatically into `./bin` at a pinned version the first time you run
-`make lint`.
+`golangci-lint`, `buf` and `protoc` are downloaded automatically into `./bin` at pinned versions
+the first time a target needs them (or all at once with `make tools`). `protoc-gen-go` is a
+`go tool` of the ingestor module, so it needs no install.
 
 ## Quickstart
 
@@ -26,23 +29,26 @@ make down        # stop it
 
 ## Make targets
 
-| Target          | What it does                                                       |
-|-----------------|--------------------------------------------------------------------|
-| `lint`          | `lint-go` (golangci-lint) + `lint-py` (ruff check/format, ty)      |
-| `test`          | `test-go` (`go test -race`) + `test-py` (pytest)                   |
-| `fmt`           | Auto-format Go and Python code                                     |
-| `up`            | `docker compose up -d --wait` for `deploy/docker-compose.yml`      |
-| `down`          | Stop the local stack                                               |
-| `gen`           | Protobuf code generation (starting in M1)                          |
-| `tools`         | Install pinned tool binaries into `./bin`                          |
-| `hooks`         | Enable the git hooks in `.githooks` (commit message check)         |
-| `check-commits` | Check commit messages in `RANGE` (default `origin/main..HEAD`)     |
+| Target          | What it does                                                        |
+|-----------------|---------------------------------------------------------------------|
+| `lint`          | `lint-go` (golangci-lint), `lint-py` (ruff, ty), `lint-proto` (buf) |
+| `test`          | `test-go` (`go test -race`) + `test-py` (pytest)                    |
+| `fmt`           | Auto-format Go, Python and protobuf code                            |
+| `up`            | `docker compose up -d --wait` for `deploy/docker-compose.yml`       |
+| `down`          | Stop the local stack                                                |
+| `gen`           | Regenerate Go and Python code from `proto/` (commit the result)     |
+| `breaking`      | `buf breaking` against `BREAKING_REF` (default `main`)              |
+| `tools`         | Install pinned tool binaries into `./bin`                           |
+| `hooks`         | Enable the git hooks in `.githooks` (commit message check)          |
+| `check-commits` | Check commit messages in `RANGE` (default `origin/main..HEAD`)      |
 
 ## Repository layout
 
 ```
-services/ingestor/   Go module: exchange adapters → normalized books → NATS
-services/detector/   Python (uv): consumes books, detects and tracks opportunities
+proto/               Protobuf contracts shared by both services (see ADR-001)
+services/ingestor/   Go module: exchange adapters → maintained books + trades → NATS
+services/detector/   Python (uv): consumes books and trades, detects and tracks opportunities
+fixtures/            test data shared across services (Protobuf golden files)
 deploy/              docker-compose and, later, migrations and observability config
 docs/                roadmap, architecture principles, ADRs
 scripts/             repo tooling (commit message check)

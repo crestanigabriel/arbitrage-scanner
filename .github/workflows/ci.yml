@@ -43,6 +43,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       python: ${{ steps.filter.outputs.python }}
       compose: ${{ steps.filter.outputs.compose }}
+      proto: ${{ steps.filter.outputs.proto }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -51,15 +52,58 @@ jobs:
           filters: |
             go:
               - 'services/ingestor/**'
+              - 'fixtures/contracts/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
             python:
               - 'services/detector/**'
+              - 'fixtures/contracts/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
             compose:
               - 'deploy/**'
               - '.github/workflows/ci.yml'
+            proto:
+              - 'proto/**'
+              - 'buf.yaml'
+              - 'buf.gen.yaml'
+              - 'services/ingestor/go.mod'
+              - 'services/ingestor/internal/gen/**'
+              - 'services/detector/src/arbscanner/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+
+  proto:
+    name: Protobuf (schema and codegen)
+    needs: changes
+    if: needs.changes.outputs.proto == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # `buf breaking` reads the base commit from git
+      # protoc-gen-go runs as a `go tool` of the ingestor module.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: services/ingestor/go.mod
+          cache-dependency-path: services/ingestor/go.sum
+      - name: Lint
+        run: make lint-proto
+      - name: Breaking changes
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        # Skipped by the target when BASE has no schema (a new branch, a force push, or the first
+        # commit that adds buf.yaml).
+        run: make breaking BREAKING_REF="$BASE"
+      - name: Generated code is up to date
+        run: |
+          make gen
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            git diff
+            echo "::error::generated code is out of date: run 'make gen' and commit the result"
+            exit 1
+          fi
 
   go:
     name: Go (ingestor)
@@ -71,7 +115,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: services/ingestor/go.mod
-          cache-dependency-path: services/ingestor/go.mod
+          cache-dependency-path: services/ingestor/go.sum
       - name: Lint
         run: make lint-go
       - name: Test

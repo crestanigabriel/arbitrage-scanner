@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+// Public trades, normalized by the ingestor.
+//
+// Subject: md.trade.<exchange>.<symbol>, for example md.trade.kraken.BTC-USD.
+// Each message on that subject is one Trade. The ingestor publishes it with the Nats-Msg-Id
+// header set to <exchange>.<symbol>.<trade_id>, so JetStream drops duplicates after a reconnect.
+//
+// Trades are not throttled: every trade the exchange reports is published.
+//
+// Decimal values use the same string format as order_book.proto: ^[0-9]+(\.[0-9]+)?$.
+package arbscanner.marketdata.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Side of an order.
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+// One execution on an exchange.
+message Trade {
+  // Lowercase exchange identifier, for example "kraken". The same token as in the subject.
+  string exchange = 1;
+  // Canonical symbol BASE-QUOTE in upper case, for example "BTC-USD".
+  string symbol = 2;
+  // The exchange's own trade identifier, as a string whatever its native type. Unique per
+  // (exchange, symbol).
+  string trade_id = 3;
+  // Execution price in quote currency, as a decimal string.
+  string price = 4;
+  // Executed quantity in base currency, as a decimal string.
+  string quantity = 5;
+  // Side of the taker (aggressor) order. Exchanges that report the maker's side are inverted by
+  // the ingestor.
+  Side taker_side = 6;
+  // When the trade happened, by the exchange's clock.
+  google.protobuf.Timestamp exchange_ts = 7;
+  // When the ingestor received it, by the ingestor's clock.
+  google.protobuf.Timestamp received_ts = 8;
+  // When the ingestor published it, by the ingestor's clock.
+  google.protobuf.Timestamp published_ts = 9;
+}

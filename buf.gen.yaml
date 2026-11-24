@@ -1,0 +1,21 @@
+# Code generation for `make gen`. Every generator is local and pinned:
+# - protoc-gen-go is a `go tool` of the ingestor module, so it always matches the Go runtime.
+# - The Python generators are built into protoc, which `make tools` downloads into bin/protoc.
+# There is no `clean: true` because the Python output dir is all of src/; `make gen` removes the
+# generated dirs itself.
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/gen
+plugins:
+  - local: ["go", "-C", "services/ingestor", "tool", "protoc-gen-go"]
+    out: services/ingestor/internal/gen
+    opt: paths=source_relative
+  - protoc_builtin: python
+    protoc_path: bin/protoc/bin/protoc
+    out: services/detector/src
+  - protoc_builtin: pyi
+    protoc_path: bin/protoc/bin/protoc
+    out: services/detector/src

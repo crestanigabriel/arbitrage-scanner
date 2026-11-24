@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+// Order books maintained by the ingestor.
+//
+// Subject: md.book.<exchange>.<symbol>, for example md.book.kraken.BTC-USD.
+// Each message on that subject is one OrderBook: the complete top of the book, so a consumer
+// simply replaces its copy with the latest message and keeps no other state.
+//
+// The ingestor owns the book. It applies the exchange's own snapshot and updates, verifies them
+// (checksums, sequence numbers), resubscribes when they fail, and only publishes a book that is
+// in sync with the exchange. While a book is resyncing nothing is published for it, so a
+// consumer sees it as stale.
+//
+// Publishing is throttled per book: at most one OrderBook per throttle interval, always showing
+// the latest state. Changes inside an interval are sent when it ends, so the newest book is
+// never held back by more than one interval. Depth and interval are ingestor configuration.
+//
+// Decimal values are strings so that no precision is lost in transit.
+// Format: ^[0-9]+(\.[0-9]+)?$ (no sign, no exponent, no thousands separator, "." as the decimal
+// point). Trailing zeros may be present and are not significant. Consumers parse them with an
+// exact decimal type (Go: a decimal library, Python: decimal.Decimal), never a float.
+package arbscanner.marketdata.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// One price level of an order book side.
+message PriceLevel {
+  // Price in quote currency per unit of base currency, as a decimal string.
+  string price = 1;
+  // Total quantity at this price in base currency, as a decimal string. Always > 0.
+  string quantity = 2;
+}
+
+// The top levels of one exchange's order book for one symbol.
+message OrderBook {
+  // Lowercase exchange identifier, for example "kraken". The same token as in the subject.
+  string exchange = 1;
+  // Canonical symbol BASE-QUOTE in upper case, for example "BTC-USD".
+  string symbol = 2;
+  // Increases by one per published OrderBook of this (exchange, symbol) and starts again at 1
+  // when the ingestor restarts. Useful to monitor dropped or reordered messages; consumers do
+  // not need it to be correct.
+  uint64 sequence = 3;
+  // Levels per side the ingestor is configured to publish (at most 100). A side has fewer when
+  // the book is thinner than that.
+  uint32 depth = 4;
+  // Bid levels, best (highest price) first.
+  repeated PriceLevel bids = 5;
+  // Ask levels, best (lowest price) first.
+  repeated PriceLevel asks = 6;
+  // Exchange time of the latest update included in this book, by the exchange's clock.
+  google.protobuf.Timestamp exchange_ts = 7;
+  // When the ingestor received that update, by the ingestor's clock.
+  google.protobuf.Timestamp received_ts = 8;
+  // When the ingestor published this book, by the ingestor's clock.
+  google.protobuf.Timestamp published_ts = 9;
+}

@@ -1,0 +1,6 @@
+# Output of `make gen`: collapsed in GitHub diffs and left out of language stats.
+services/ingestor/internal/gen/** linguist-generated=true
+services/detector/src/arbscanner/** linguist-generated=true
+
+# Protobuf golden files written by `go test ./internal/contract -update`.
+*.binpb binary

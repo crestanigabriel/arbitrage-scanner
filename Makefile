@@ -3,25 +3,46 @@
 # CI calls these same targets.
 
 GOLANGCI_LINT_VERSION := v2.15.0
+BUF_VERSION           := v1.75.0
+# Keep in step with the Python `protobuf` runtime (7.<PROTOC_VERSION>) in services/detector.
+PROTOC_VERSION        := 36.2
+
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
 
 BIN           := $(CURDIR)/bin
 GOLANGCI_LINT := $(BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+BUF           := $(BIN)/buf-$(BUF_VERSION)
+# buf.gen.yaml points at bin/protoc/bin/protoc; the stamp file makes a version bump reinstall it.
+PROTOC_DIR    := $(BIN)/protoc
+PROTOC_STAMP  := $(PROTOC_DIR)/.version-$(PROTOC_VERSION)
+ifeq ($(UNAME_S),Darwin)
+PROTOC_PLATFORM := osx-universal_binary
+else
+PROTOC_PLATFORM := linux-$(subst aarch64,aarch_64,$(UNAME_M))
+endif
 
 INGESTOR := services/ingestor
 DETECTOR := services/detector
 COMPOSE  := docker compose -f deploy/docker-compose.yml
+
+# Output of `make gen`. Never edit these by hand.
+GEN_DIRS := $(INGESTOR)/internal/gen $(DETECTOR)/src/arbscanner
 
 .DEFAULT_GOAL := help
 
 # Commits checked by `make check-commits`: everything not yet on origin/main by default.
 RANGE ?= origin/main..HEAD
 
-.PHONY: help lint lint-go lint-py test test-go test-py fmt up down gen tools hooks check-commits
+# Git ref that `make breaking` compares the protobuf schema against.
+BREAKING_REF ?= main
+
+.PHONY: help lint lint-go lint-py lint-proto test test-go test-py fmt up down gen breaking tools hooks check-commits
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
 
-lint: lint-go lint-py ## Run all linters
+lint: lint-go lint-py lint-proto ## Run all linters
 
 test: test-go test-py ## Run all tests
 
@@ -39,10 +60,15 @@ lint-py: ## Lint Python (ruff check, ruff format --check, ty)
 test-py: ## Run Python tests
 	cd $(DETECTOR) && uv run --locked pytest
 
-fmt: $(GOLANGCI_LINT) ## Auto-format Go and Python code
+lint-proto: $(BUF) ## Lint and format-check the protobuf schema (buf)
+	$(BUF) lint
+	$(BUF) format --diff --exit-code
+
+fmt: $(GOLANGCI_LINT) $(BUF) ## Auto-format Go, Python and protobuf code
 	cd $(INGESTOR) && $(GOLANGCI_LINT) fmt ./...
 	cd $(DETECTOR) && uv run --locked ruff check --fix .
 	cd $(DETECTOR) && uv run --locked ruff format .
+	$(BUF) format --write
 
 up: ## Start the local stack (waits for healthchecks)
 	$(COMPOSE) up -d --wait
@@ -50,10 +76,20 @@ up: ## Start the local stack (waits for healthchecks)
 down: ## Stop the local stack
 	$(COMPOSE) down
 
-gen: ## Generate code from protobuf definitions
-	@echo "nothing to generate yet (protobuf codegen arrives in M1)"
+gen: $(BUF) $(PROTOC_STAMP) ## Generate Go and Python code from the protobuf schema
+	rm -rf $(GEN_DIRS)
+	$(BUF) generate
 
-tools: $(GOLANGCI_LINT) ## Install pinned tool binaries into ./bin
+# Skipped when BREAKING_REF has no buf.yaml yet (the first commit that adds the schema).
+breaking: $(BUF) ## Check the protobuf schema for breaking changes against BREAKING_REF (default main)
+	@if git cat-file -e '$(BREAKING_REF):buf.yaml' 2>/dev/null; then \
+		echo "$(BUF) breaking --against '.git#ref=$(BREAKING_REF)'"; \
+		$(BUF) breaking --against '.git#ref=$(BREAKING_REF)'; \
+	else \
+		echo "no buf.yaml at $(BREAKING_REF), nothing to compare against: skipping"; \
+	fi
+
+tools: $(GOLANGCI_LINT) $(BUF) $(PROTOC_STAMP) ## Install pinned tool binaries into ./bin
 
 hooks: ## Enable the repo git hooks (Conventional Commits check on commit)
 	git config core.hooksPath .githooks
@@ -67,3 +103,18 @@ $(GOLANGCI_LINT):
 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh \
 		| sh -s -- -b $(BIN) $(GOLANGCI_LINT_VERSION)
 	mv $(BIN)/golangci-lint $(GOLANGCI_LINT)
+
+$(BUF):
+	mkdir -p $(BIN)
+	curl -sSfL -o $@.tmp https://github.com/bufbuild/buf/releases/download/$(BUF_VERSION)/buf-$(UNAME_S)-$(UNAME_M)
+	chmod +x $@.tmp
+	mv $@.tmp $@
+
+$(PROTOC_STAMP):
+	rm -rf $(PROTOC_DIR)
+	mkdir -p $(PROTOC_DIR)
+	curl -sSfL -o $(PROTOC_DIR)/protoc.zip \
+		https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/protoc-$(PROTOC_VERSION)-$(PROTOC_PLATFORM).zip
+	unzip -q $(PROTOC_DIR)/protoc.zip -d $(PROTOC_DIR)
+	rm $(PROTOC_DIR)/protoc.zip
+	touch $@
