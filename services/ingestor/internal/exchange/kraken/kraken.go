@@ -115,7 +115,7 @@ func (s *Source) Run(ctx context.Context, out chan<- exchange.Event) error {
 	return s.connector.Run(ctx, func(ctx context.Context, conn exchange.Conn, healthy func()) error {
 		sess := &session{
 			src:         s,
-			conn:        conn,
+			conn:        exchange.WithIdleTimeout(conn, s.clock, s.idleTimeout),
 			out:         out,
 			healthy:     healthy,
 			pendingAcks: 2 * len(s.krakenSymbols), // one per symbol for book and for trade
@@ -127,8 +127,6 @@ func (s *Source) Run(ctx context.Context, out chan<- exchange.Event) error {
 		return sess.run(ctx)
 	})
 }
-
-var errIdle = errors.New("kraken: no message within the idle timeout")
 
 // session is the state of one connection. Books start over on every connection.
 type session struct {
@@ -148,18 +146,12 @@ type bookState struct {
 	live bool
 }
 
-func (s *session) run(parent context.Context) error {
-	ctx, cancel := context.WithCancelCause(parent)
-	activity := make(chan struct{}, 1)
-	watchdogDone := make(chan struct{})
-	go s.watchdog(ctx, cancel, activity, watchdogDone)
+func (s *session) run(ctx context.Context) error {
 	defer func() {
-		cancel(nil)
-		<-watchdogDone
-		// The books die with the connection. Sent on parent: on shutdown nobody is listening.
+		// The books die with the connection. On shutdown nobody is listening, and Send gives up.
 		for _, k := range s.src.krakenSymbols {
 			if st := s.books[k]; st.live {
-				exchange.Send(parent, s.out, s.reset(st, exchange.ResetReconnect))
+				exchange.Send(ctx, s.out, s.reset(st, exchange.ResetReconnect))
 			}
 		}
 	}()
@@ -174,35 +166,10 @@ func (s *session) run(parent context.Context) error {
 	for {
 		msg, err := s.conn.Read(ctx)
 		if err != nil {
-			if cause := context.Cause(ctx); errors.Is(cause, errIdle) {
-				return errIdle
-			}
 			return fmt.Errorf("kraken: read: %w", err)
-		}
-		select {
-		case activity <- struct{}{}:
-		default:
 		}
 		if err := s.handle(ctx, msg, s.src.clock.Now()); err != nil {
 			return err
-		}
-	}
-}
-
-// watchdog cancels the session when no message arrives within the idle timeout.
-func (s *session) watchdog(ctx context.Context, cancel context.CancelCauseFunc, activity <-chan struct{}, done chan<- struct{}) {
-	defer close(done)
-	t := s.src.clock.NewTimer(s.src.idleTimeout)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-activity:
-			t.Reset(s.src.idleTimeout)
-		case <-t.C():
-			cancel(errIdle)
-			return
 		}
 	}
 }
