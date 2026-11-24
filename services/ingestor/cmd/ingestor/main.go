@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/clock"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/config"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange"
+	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange/coinbase"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange/kraken"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/pipeline"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/publish"
@@ -33,11 +35,14 @@ import (
 
 // Wiring constants that are not worth configuring.
 const (
+	// The backoff also keeps reconnects well under Coinbase's 8 connections per second.
 	reconnectBase = 500 * time.Millisecond
 	reconnectMax  = 30 * time.Second
-	// Kraken sends a heartbeat every second while subscribed.
+	// Kraken and Coinbase both send a heartbeat every second while subscribed.
 	idleTimeout = 10 * time.Second
-	// Room for bursts (a snapshot of trades, a reconnect) between the source and the pipeline.
+	// A Coinbase book snapshot is one message: about 4 MB for BTC-USD on 2026-11-24.
+	coinbaseReadLimit = 32 << 20
+	// Room for bursts (a snapshot of trades, a reconnect) between the sources and the pipeline.
 	eventBuffer = 1024
 )
 
@@ -61,7 +66,7 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	log := slog.New(slog.NewJSONHandler(logOut, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	log.InfoContext(ctx, "starting",
 		"symbols", cfg.Symbols, "book_depth", cfg.BookDepth, "book_throttle", cfg.BookThrottle.String(),
-		"nats_url", cfg.NATSURL, "kraken_ws_url", cfg.KrakenWSURL)
+		"nats_url", cfg.NATSURL, "kraken_ws_url", cfg.KrakenWSURL, "coinbase_ws_url", cfg.CoinbaseWSURL)
 
 	clk := clock.Real{}
 
@@ -97,25 +102,46 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	}
 	publisher := publish.NewJetStream(js, js)
 
-	backoff := exchange.NewBackoff(reconnectBase, reconnectMax, rand.N[time.Duration]) // jitter, not a security value
-	connector := exchange.NewReconnector(cfg.KrakenWSURL, ws.Dialer{}, clk, backoff, log.With("exchange", kraken.Exchange))
-	source, err := kraken.New(kraken.Config{
+	// One source per exchange, each with its own connection and reconnect backoff.
+	connector := func(ex, url string, readLimit int64) exchange.Connector {
+		backoff := exchange.NewBackoff(reconnectBase, reconnectMax, rand.N[time.Duration]) // jitter, not a security value
+		return exchange.NewReconnector(url, ws.Dialer{ReadLimit: readLimit}, clk, backoff, log.With("exchange", ex))
+	}
+	krakenSource, err := kraken.New(kraken.Config{
 		Symbols:     cfg.Symbols,
 		Depth:       cfg.BookDepth,
 		IdleTimeout: idleTimeout,
-	}, connector, clk, log)
+	}, connector(kraken.Exchange, cfg.KrakenWSURL, 0), clk, log)
 	if err != nil {
 		return err
 	}
+	coinbaseSource, err := coinbase.New(coinbase.Config{
+		Symbols:     cfg.Symbols,
+		Depth:       cfg.BookDepth,
+		IdleTimeout: idleTimeout,
+	}, connector(coinbase.Exchange, cfg.CoinbaseWSURL, coinbaseReadLimit), clk, log)
+	if err != nil {
+		return err
+	}
+	sources := []exchange.MarketSource{krakenSource, coinbaseSource}
 
 	bookThrottle := throttle.New[pipeline.BookKey, exchange.BookUpdate](clk, cfg.BookThrottle)
 	pipe := pipeline.New(publisher, bookThrottle, clk, uint32(cfg.BookDepth), log) //nolint:gosec // 1-100, validated by config
 
 	events := make(chan exchange.Event, eventBuffer)
 	g, gctx := errgroup.WithContext(ctx)
+	var running sync.WaitGroup
+	for _, src := range sources {
+		running.Add(1)
+		g.Go(func() error {
+			defer running.Done()
+			return src.Run(gctx, events)
+		})
+	}
 	g.Go(func() error {
-		defer close(events)
-		return source.Run(gctx, events)
+		running.Wait() // every source has stopped sending
+		close(events)
+		return nil
 	})
 	g.Go(func() error { return pipe.Run(gctx, events) })
 	err = g.Wait()

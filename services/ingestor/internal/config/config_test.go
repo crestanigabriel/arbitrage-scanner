@@ -26,12 +26,13 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := config.Config{
-		BookDepth:    50,
-		BookThrottle: 50 * time.Millisecond,
-		Symbols:      []string{"BTC-USD"},
-		NATSURL:      "nats://localhost:4222",
-		KrakenWSURL:  "wss://ws.kraken.com/v2",
-		LogLevel:     slog.LevelInfo,
+		BookDepth:     50,
+		BookThrottle:  50 * time.Millisecond,
+		Symbols:       []string{"BTC-USD"},
+		NATSURL:       "nats://localhost:4222",
+		KrakenWSURL:   "wss://ws.kraken.com/v2",
+		CoinbaseWSURL: "wss://advanced-trade-ws.coinbase.com",
+		LogLevel:      slog.LevelInfo,
 	}
 	if !equal(cfg, want) {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -45,18 +46,20 @@ func TestOverrides(t *testing.T) {
 		"SYMBOLS":          " BTC-USD, ETH-USD ",
 		"NATS_URL":         "nats://nats:4222",
 		"KRAKEN_WS_URL":    "ws://localhost:9999",
+		"COINBASE_WS_URL":  "ws://localhost:9998",
 		"LOG_LEVEL":        "DEBUG",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := config.Config{
-		BookDepth:    100,
-		BookThrottle: 0,
-		Symbols:      []string{"BTC-USD", "ETH-USD"},
-		NATSURL:      "nats://nats:4222",
-		KrakenWSURL:  "ws://localhost:9999",
-		LogLevel:     slog.LevelDebug,
+		BookDepth:     100,
+		BookThrottle:  0,
+		Symbols:       []string{"BTC-USD", "ETH-USD"},
+		NATSURL:       "nats://nats:4222",
+		KrakenWSURL:   "ws://localhost:9999",
+		CoinbaseWSURL: "ws://localhost:9998",
+		LogLevel:      slog.LevelDebug,
 	}
 	if !equal(cfg, want) {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -110,7 +113,8 @@ func TestInvalid(t *testing.T) {
 func equal(a, b config.Config) bool {
 	return a.BookDepth == b.BookDepth && a.BookThrottle == b.BookThrottle &&
 		slices.Equal(a.Symbols, b.Symbols) && a.NATSURL == b.NATSURL &&
-		a.KrakenWSURL == b.KrakenWSURL && a.LogLevel == b.LogLevel
+		a.KrakenWSURL == b.KrakenWSURL && a.CoinbaseWSURL == b.CoinbaseWSURL &&
+		a.LogLevel == b.LogLevel
 }
 
 // TestEnvFile checks deploy/ingestor.env, the file `make run-ingestor` loads: it must list

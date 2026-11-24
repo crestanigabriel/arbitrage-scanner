@@ -266,6 +266,8 @@ func (s *session) handleBook(ctx context.Context, typ string, d *bookData, recei
 		Symbol:       st.canonical,
 		Bids:         bids,
 		Asks:         asks,
+		BidLevels:    st.book.Len(book.Bid),
+		AskLevels:    st.book.Len(book.Ask),
 		ExchangeTime: d.Timestamp,
 		ReceivedTime: received,
 	})

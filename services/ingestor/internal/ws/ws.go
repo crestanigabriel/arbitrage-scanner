@@ -11,17 +11,21 @@ import (
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange"
 )
 
-// readLimit is the largest message accepted. The library default (32 KB) is smaller than a
-// deep book snapshot.
-const readLimit = 1 << 20
+// DefaultReadLimit is the largest message accepted when Dialer.ReadLimit is 0. The library
+// default (32 KB) is smaller than a deep book snapshot.
+const DefaultReadLimit = 1 << 20
 
 // Dialer opens WebSocket connections.
-type Dialer struct{}
+type Dialer struct {
+	// ReadLimit is the largest message accepted, in bytes; 0 means DefaultReadLimit. A Coinbase
+	// book snapshot is one message of several MB.
+	ReadLimit int64
+}
 
 var _ exchange.Dialer = Dialer{}
 
 // Dial implements exchange.Dialer.
-func (Dialer) Dial(ctx context.Context, url string) (exchange.Conn, error) {
+func (d Dialer) Dial(ctx context.Context, url string) (exchange.Conn, error) {
 	c, resp, err := websocket.Dial(ctx, url, nil)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
@@ -29,7 +33,11 @@ func (Dialer) Dial(ctx context.Context, url string) (exchange.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("websocket dial %s: %w", url, err)
 	}
-	c.SetReadLimit(readLimit)
+	limit := d.ReadLimit
+	if limit <= 0 {
+		limit = DefaultReadLimit
+	}
+	c.SetReadLimit(limit)
 	return &conn{c: c}, nil
 }
 

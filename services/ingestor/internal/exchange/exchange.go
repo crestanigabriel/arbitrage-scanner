@@ -31,9 +31,12 @@ type BookUpdate struct {
 	Symbol   string // canonical BASE-QUOTE, e.g. "BTC-USD"
 	// Bids and Asks are best first, at most the configured depth each. The adapter hands over
 	// ownership: they are copies, never shared with its book.
-	Bids, Asks   []book.Level
-	ExchangeTime time.Time // exchange time of the latest update included
-	ReceivedTime time.Time // when the adapter received that update
+	Bids, Asks []book.Level
+	// BidLevels and AskLevels are the sizes of the adapter's local book, which can be much
+	// deeper than what is published (Coinbase sends its whole book).
+	BidLevels, AskLevels int
+	ExchangeTime         time.Time // exchange time of the latest update included
+	ReceivedTime         time.Time // when the adapter received that update
 }
 
 // BookReset reports that a book is out of sync and must not be published until the next

@@ -14,13 +14,14 @@ import (
 
 // Defaults and limits.
 const (
-	DefaultBookDepth   = 50
-	MaxBookDepth       = 100 // the OrderBook contract limit
-	DefaultThrottle    = 50 * time.Millisecond
-	DefaultSymbols     = "BTC-USD"
-	DefaultNATSURL     = "nats://localhost:4222"
-	DefaultKrakenWSURL = "wss://ws.kraken.com/v2"
-	DefaultLogLevel    = "info"
+	DefaultBookDepth     = 50
+	MaxBookDepth         = 100 // the OrderBook contract limit
+	DefaultThrottle      = 50 * time.Millisecond
+	DefaultSymbols       = "BTC-USD"
+	DefaultNATSURL       = "nats://localhost:4222"
+	DefaultKrakenWSURL   = "wss://ws.kraken.com/v2"
+	DefaultCoinbaseWSURL = "wss://advanced-trade-ws.coinbase.com"
+	DefaultLogLevel      = "info"
 )
 
 // Environment variables read by Load.
@@ -30,21 +31,25 @@ const (
 	EnvBookThrottleMS = "BOOK_THROTTLE_MS"
 	EnvNATSURL        = "NATS_URL"
 	EnvKrakenWSURL    = "KRAKEN_WS_URL"
+	EnvCoinbaseWSURL  = "COINBASE_WS_URL"
 	EnvLogLevel       = "LOG_LEVEL"
 )
 
 // Variables lists every environment variable Load reads. deploy/ingestor.env documents each
 // of them, and a test keeps the two in step.
-var Variables = []string{EnvSymbols, EnvBookDepth, EnvBookThrottleMS, EnvNATSURL, EnvKrakenWSURL, EnvLogLevel}
+var Variables = []string{
+	EnvSymbols, EnvBookDepth, EnvBookThrottleMS, EnvNATSURL, EnvKrakenWSURL, EnvCoinbaseWSURL, EnvLogLevel,
+}
 
 // Config is the validated configuration.
 type Config struct {
-	BookDepth    int           // BOOK_DEPTH: levels per side in each published OrderBook
-	BookThrottle time.Duration // BOOK_THROTTLE_MS: minimum interval between publishes of one book; 0 publishes every update
-	Symbols      []string      // SYMBOLS: comma-separated canonical symbols, e.g. "BTC-USD,ETH-USD"
-	NATSURL      string        // NATS_URL
-	KrakenWSURL  string        // KRAKEN_WS_URL
-	LogLevel     slog.Level    // LOG_LEVEL: debug, info, warn or error
+	BookDepth     int           // BOOK_DEPTH: levels per side in each published OrderBook
+	BookThrottle  time.Duration // BOOK_THROTTLE_MS: minimum interval between publishes of one book; 0 publishes every update
+	Symbols       []string      // SYMBOLS: comma-separated canonical symbols, e.g. "BTC-USD,ETH-USD"
+	NATSURL       string        // NATS_URL
+	KrakenWSURL   string        // KRAKEN_WS_URL
+	CoinbaseWSURL string        // COINBASE_WS_URL
+	LogLevel      slog.Level    // LOG_LEVEL: debug, info, warn or error
 }
 
 // symbolPattern is a canonical BASE-QUOTE symbol: upper-case letters and digits, which are
@@ -62,8 +67,9 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	var errs []error
 	cfg := Config{
-		NATSURL:     get(EnvNATSURL, DefaultNATSURL),
-		KrakenWSURL: get(EnvKrakenWSURL, DefaultKrakenWSURL),
+		NATSURL:       get(EnvNATSURL, DefaultNATSURL),
+		KrakenWSURL:   get(EnvKrakenWSURL, DefaultKrakenWSURL),
+		CoinbaseWSURL: get(EnvCoinbaseWSURL, DefaultCoinbaseWSURL),
 	}
 
 	depth, err := strconv.Atoi(get(EnvBookDepth, strconv.Itoa(DefaultBookDepth)))
