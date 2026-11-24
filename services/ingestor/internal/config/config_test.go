@@ -32,6 +32,7 @@ func TestDefaults(t *testing.T) {
 		NATSURL:       "nats://localhost:4222",
 		KrakenWSURL:   "wss://ws.kraken.com/v2",
 		CoinbaseWSURL: "wss://advanced-trade-ws.coinbase.com",
+		HTTPAddr:      ":8080",
 		LogLevel:      slog.LevelInfo,
 	}
 	if !equal(cfg, want) {
@@ -47,6 +48,7 @@ func TestOverrides(t *testing.T) {
 		"NATS_URL":         "nats://nats:4222",
 		"KRAKEN_WS_URL":    "ws://localhost:9999",
 		"COINBASE_WS_URL":  "ws://localhost:9998",
+		"HTTP_ADDR":        "127.0.0.1:9100",
 		"LOG_LEVEL":        "DEBUG",
 	}))
 	if err != nil {
@@ -59,6 +61,7 @@ func TestOverrides(t *testing.T) {
 		NATSURL:       "nats://nats:4222",
 		KrakenWSURL:   "ws://localhost:9999",
 		CoinbaseWSURL: "ws://localhost:9998",
+		HTTPAddr:      "127.0.0.1:9100",
 		LogLevel:      slog.LevelDebug,
 	}
 	if !equal(cfg, want) {
@@ -90,6 +93,9 @@ func TestInvalid(t *testing.T) {
 		{map[string]string{"SYMBOLS": "BTC-USD,"}, []string{`"" is not a canonical`}},
 		{map[string]string{"SYMBOLS": "BTC-USD,BTC-USD"}, []string{`"BTC-USD" is listed twice`}},
 		{map[string]string{"LOG_LEVEL": "loud"}, []string{"LOG_LEVEL"}},
+		{map[string]string{"HTTP_ADDR": "8080"}, []string{"HTTP_ADDR"}},
+		{map[string]string{"HTTP_ADDR": ":http"}, []string{`HTTP_ADDR: "http" is not a port number`}},
+		{map[string]string{"HTTP_ADDR": ":0"}, []string{"HTTP_ADDR"}},
 		{
 			// Every problem is reported at once.
 			map[string]string{"BOOK_DEPTH": "0", "BOOK_THROTTLE_MS": "x", "SYMBOLS": "BTC.USD"},
@@ -114,7 +120,7 @@ func equal(a, b config.Config) bool {
 	return a.BookDepth == b.BookDepth && a.BookThrottle == b.BookThrottle &&
 		slices.Equal(a.Symbols, b.Symbols) && a.NATSURL == b.NATSURL &&
 		a.KrakenWSURL == b.KrakenWSURL && a.CoinbaseWSURL == b.CoinbaseWSURL &&
-		a.LogLevel == b.LogLevel
+		a.HTTPAddr == b.HTTPAddr && a.LogLevel == b.LogLevel
 }
 
 // TestEnvFile checks deploy/ingestor.env, the file `make run-ingestor` loads: it must list

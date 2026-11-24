@@ -30,21 +30,29 @@ func (e *PermanentError) Unwrap() error { return e.Err }
 // Permanent wraps err so that a Connector stops instead of reconnecting.
 func Permanent(err error) error { return &PermanentError{Err: err} }
 
+// ReconnectObserver is told about every reconnect, for metrics.
+type ReconnectObserver interface {
+	// Reconnecting is called each time a connection is lost or a dial fails, before the
+	// backoff wait.
+	Reconnecting()
+}
+
 // Reconnector is the Connector used by the exchange adapters: it redials with a Backoff,
 // waiting on the injected Clock.
 type Reconnector struct {
-	url     string
-	dialer  Dialer
-	clock   clock.Clock
-	backoff *Backoff
-	log     *slog.Logger
+	url      string
+	dialer   Dialer
+	clock    clock.Clock
+	backoff  *Backoff
+	observer ReconnectObserver
+	log      *slog.Logger
 }
 
 var _ Connector = (*Reconnector)(nil)
 
 // NewReconnector returns a Reconnector for url.
-func NewReconnector(url string, d Dialer, c clock.Clock, b *Backoff, log *slog.Logger) *Reconnector {
-	return &Reconnector{url: url, dialer: d, clock: c, backoff: b, log: log}
+func NewReconnector(url string, d Dialer, c clock.Clock, b *Backoff, o ReconnectObserver, log *slog.Logger) *Reconnector {
+	return &Reconnector{url: url, dialer: d, clock: c, backoff: b, observer: o, log: log}
 }
 
 // Run implements Connector.
@@ -57,6 +65,7 @@ func (r *Reconnector) Run(ctx context.Context, session Session) error {
 		if perr, ok := errors.AsType[*PermanentError](err); ok {
 			return perr
 		}
+		r.observer.Reconnecting()
 		wait := r.backoff.Next()
 		r.log.WarnContext(ctx, "connection lost, reconnecting", "url", r.url, "error", err, "wait", wait.String())
 		timer := r.clock.NewTimer(wait)

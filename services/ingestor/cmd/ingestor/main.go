@@ -12,6 +12,8 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -20,6 +22,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/clock"
@@ -27,6 +31,8 @@ import (
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange/coinbase"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/exchange/kraken"
+	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/httpserver"
+	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/metrics"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/pipeline"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/publish"
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/throttle"
@@ -44,9 +50,18 @@ const (
 	coinbaseReadLimit = 32 << 20
 	// Room for bursts (a snapshot of trades, a reconnect) between the sources and the pipeline.
 	eventBuffer = 1024
+	// How long `ingestor healthcheck` waits for /healthz.
+	probeTimeout = 3 * time.Second
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := healthcheck(os.LookupEnv); err != nil {
+			fmt.Fprintln(os.Stderr, "ingestor healthcheck:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := run(ctx, os.LookupEnv, os.Stderr)
 	stop()
@@ -54,6 +69,30 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ingestor:", err)
 		os.Exit(1)
 	}
+}
+
+// healthcheck asks the running ingestor's /healthz, on HTTP_ADDR, whether it is healthy. It is
+// the container healthcheck: the distroless image has no curl or wget.
+func healthcheck(lookupEnv func(string) (string, bool)) error {
+	cfg, err := config.Load(lookupEnv)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	return httpserver.Probe(ctx, &http.Client{Timeout: probeTimeout}, probeURL(cfg.HTTPAddr))
+}
+
+// probeURL is the /healthz URL for a listen address: a wildcard host is reached on loopback.
+func probeURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil { // config.Load validated it
+		host, port = "", addr
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/healthz"
 }
 
 // run wires the service and runs it until ctx is done. Configuration comes through lookupEnv
@@ -66,9 +105,17 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	log := slog.New(slog.NewJSONHandler(logOut, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	log.InfoContext(ctx, "starting",
 		"symbols", cfg.Symbols, "book_depth", cfg.BookDepth, "book_throttle", cfg.BookThrottle.String(),
-		"nats_url", cfg.NATSURL, "kraken_ws_url", cfg.KrakenWSURL, "coinbase_ws_url", cfg.CoinbaseWSURL)
+		"nats_url", cfg.NATSURL, "kraken_ws_url", cfg.KrakenWSURL, "coinbase_ws_url", cfg.CoinbaseWSURL,
+		"http_addr", cfg.HTTPAddr)
 
 	clk := clock.Real{}
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	m, err := metrics.New(reg)
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
 
 	closed := make(chan struct{})
 	nc, err := nats.Connect(cfg.NATSURL,
@@ -102,10 +149,10 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	}
 	publisher := publish.NewJetStream(js, js)
 
-	// One source per exchange, each with its own connection and reconnect backoff.
+	// One source per exchange, each with its own connection, reconnect backoff and metrics.
 	connector := func(ex, url string, readLimit int64) exchange.Connector {
 		backoff := exchange.NewBackoff(reconnectBase, reconnectMax, rand.N[time.Duration]) // jitter, not a security value
-		return exchange.NewReconnector(url, ws.Dialer{ReadLimit: readLimit}, clk, backoff, log.With("exchange", ex))
+		return exchange.NewReconnector(url, ws.Dialer{ReadLimit: readLimit}, clk, backoff, m.Reconnects(ex), log.With("exchange", ex))
 	}
 	krakenSource, err := kraken.New(kraken.Config{
 		Symbols:     cfg.Symbols,
@@ -126,7 +173,19 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	sources := []exchange.MarketSource{krakenSource, coinbaseSource}
 
 	bookThrottle := throttle.New[pipeline.BookKey, exchange.BookUpdate](clk, cfg.BookThrottle)
-	pipe := pipeline.New(publisher, bookThrottle, clk, uint32(cfg.BookDepth), log) //nolint:gosec // 1-100, validated by config
+	pipe := pipeline.New(publisher, bookThrottle, m, clk, uint32(cfg.BookDepth), log) //nolint:gosec // 1-100, validated by config
+
+	health := httpserver.CheckFunc(func() error {
+		if st := nc.Status(); st != nats.CONNECTED {
+			return fmt.Errorf("nats: %s", st)
+		}
+		return nil
+	})
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", cfg.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("http listen: %w", err)
+	}
 
 	events := make(chan exchange.Event, eventBuffer)
 	g, gctx := errgroup.WithContext(ctx)
@@ -144,6 +203,7 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 		return nil
 	})
 	g.Go(func() error { return pipe.Run(gctx, events) })
+	g.Go(func() error { return httpserver.Serve(gctx, ln, httpserver.Handler(reg, health)) })
 	err = g.Wait()
 	if err == nil || errors.Is(err, context.Canceled) {
 		log.Info("stopped")

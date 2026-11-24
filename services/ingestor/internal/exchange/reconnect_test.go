@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -16,11 +17,17 @@ import (
 const url = "wss://example.test/ws"
 
 type harness struct {
-	clock   *clocktest.Fake
-	dialer  *exchangetest.Dialer
-	backoff *exchange.Backoff
-	rc      *exchange.Reconnector
+	clock      *clocktest.Fake
+	dialer     *exchangetest.Dialer
+	backoff    *exchange.Backoff
+	reconnects counter
+	rc         *exchange.Reconnector
 }
+
+// counter is a fake ReconnectObserver.
+type counter struct{ n atomic.Int64 }
+
+func (c *counter) Reconnecting() { c.n.Add(1) }
 
 func newHarness() *harness {
 	h := &harness{
@@ -28,7 +35,7 @@ func newHarness() *harness {
 		dialer:  exchangetest.NewDialer(),
 		backoff: exchange.NewBackoff(time.Second, time.Minute, noJitter),
 	}
-	h.rc = exchange.NewReconnector(url, h.dialer, h.clock, h.backoff, slog.New(slog.DiscardHandler))
+	h.rc = exchange.NewReconnector(url, h.dialer, h.clock, h.backoff, &h.reconnects, slog.New(slog.DiscardHandler))
 	return h
 }
 
@@ -84,6 +91,9 @@ func TestReconnectorRedialsWithBackoff(t *testing.T) {
 		if h.dialer.Dials() != 3 {
 			t.Fatalf("dials = %d after the second backoff, want 3", h.dialer.Dials())
 		}
+		if n := h.reconnects.n.Load(); n != 3 {
+			t.Errorf("observer saw %d reconnects, want one per lost connection (3)", n)
+		}
 
 		cancel()
 		if err := <-done; err != nil {
@@ -132,6 +142,9 @@ func TestReconnectorRetriesDialErrors(t *testing.T) {
 		case <-ran:
 		default:
 			t.Fatal("no session after a failed dial and one backoff")
+		}
+		if n := h.reconnects.n.Load(); n != 1 {
+			t.Errorf("observer saw %d reconnects, want 1 for the failed dial", n)
 		}
 	})
 }

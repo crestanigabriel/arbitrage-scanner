@@ -37,3 +37,26 @@ func TestRunFailsWithoutNATS(t *testing.T) {
 		t.Errorf("no JSON start log line in %q", logs.String())
 	}
 }
+
+func TestProbeURL(t *testing.T) {
+	tests := map[string]string{
+		":8080":          "http://127.0.0.1:8080/healthz",
+		"0.0.0.0:8080":   "http://127.0.0.1:8080/healthz",
+		"[::]:8080":      "http://127.0.0.1:8080/healthz",
+		"10.0.0.5:9100":  "http://10.0.0.5:9100/healthz",
+		"localhost:8080": "http://localhost:8080/healthz",
+		"[::1]:8080":     "http://[::1]:8080/healthz",
+	}
+	for addr, want := range tests {
+		if got := probeURL(addr); got != want {
+			t.Errorf("probeURL(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}
+
+func TestHealthcheckFailsWithNothingListening(t *testing.T) {
+	// Port 1 on loopback: nothing listens there.
+	if err := healthcheck(env(map[string]string{"HTTP_ADDR": "127.0.0.1:1"})); err == nil {
+		t.Fatal("healthcheck() succeeded with no server")
+	}
+}

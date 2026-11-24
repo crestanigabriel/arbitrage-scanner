@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -60,23 +61,57 @@ func (f *fakePublisher) published() []string {
 	return out
 }
 
+// fakeMetrics records every call as a line of text.
+type fakeMetrics struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (f *fakeMetrics) record(format string, args ...any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf(format, args...))
+}
+
+func (f *fakeMetrics) BookUpdated(ex, sym string, bids, asks int) {
+	f.record("update %s %s %d/%d", ex, sym, bids, asks)
+}
+
+func (f *fakeMetrics) BookReset(ex, sym string, reason exchange.ResetReason) {
+	f.record("reset %s %s %s", ex, sym, reason)
+}
+
+func (f *fakeMetrics) TradeReceived(ex, sym string) { f.record("trade %s %s", ex, sym) }
+
+func (f *fakeMetrics) Published(kind pipeline.Kind, ex, sym string, _ time.Duration, err error) {
+	f.record("published %s %s %s %v", kind, ex, sym, err)
+}
+
+func (f *fakeMetrics) recorded() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
+}
+
 type harness struct {
-	clock *clocktest.Fake
-	pub   *fakePublisher
-	in    chan exchange.Event
-	done  chan error
+	clock   *clocktest.Fake
+	pub     *fakePublisher
+	metrics *fakeMetrics
+	in      chan exchange.Event
+	done    chan error
 }
 
 func runPipeline(ctx context.Context, t *testing.T) *harness {
 	t.Helper()
 	h := &harness{
-		clock: clocktest.NewFake(t0),
-		pub:   &fakePublisher{},
-		in:    make(chan exchange.Event),
-		done:  make(chan error, 1),
+		clock:   clocktest.NewFake(t0),
+		pub:     &fakePublisher{},
+		metrics: &fakeMetrics{},
+		in:      make(chan exchange.Event),
+		done:    make(chan error, 1),
 	}
 	th := throttle.New[pipeline.BookKey, exchange.BookUpdate](h.clock, interval)
-	p := pipeline.New(h.pub, th, h.clock, 50, slog.New(slog.DiscardHandler))
+	p := pipeline.New(h.pub, th, h.metrics, h.clock, 50, slog.New(slog.DiscardHandler))
 	go func() { h.done <- p.Run(ctx, h.in) }()
 	return h
 }
@@ -104,6 +139,8 @@ func update(symbol, tag string) exchange.BookUpdate {
 		Symbol:       symbol,
 		Bids:         []book.Level{lvl("100.0", tag), lvl("99.5", "2")},
 		Asks:         []book.Level{lvl("100.5", "0.50000000")},
+		BidLevels:    2,
+		AskLevels:    1,
 		ExchangeTime: t0.Add(-2 * time.Millisecond),
 		ReceivedTime: t0.Add(-time.Millisecond),
 	}
@@ -254,6 +291,35 @@ func TestRunStops(t *testing.T) {
 		close(h2.in)
 		if err := <-h2.done; err != nil {
 			t.Errorf("Run() = %v after the input closed, want nil", err)
+		}
+	})
+}
+
+func TestMetrics(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := runPipeline(t.Context(), t)
+		h.send(update("BTC-USD", "1"), update("BTC-USD", "2")) // the second is held
+		h.send(exchange.BookReset{Exchange: "kraken", Symbol: "BTC-USD", Reason: exchange.ResetChecksum})
+		h.send(exchange.Trade{
+			Exchange: "kraken", Symbol: "BTC-USD", TradeID: "1",
+			Price: decimal.MustParse("1"), Quantity: decimal.MustParse("1"), TakerSide: exchange.SideBuy,
+		})
+		h.pub.err = errors.New("nats: timeout")
+		h.advance(interval)
+		h.send(update("ETH-USD", "1"))
+
+		want := []string{
+			"update kraken BTC-USD 2/1",
+			"published book kraken BTC-USD <nil>",
+			"update kraken BTC-USD 2/1", // counted although the throttle holds it
+			"reset kraken BTC-USD checksum",
+			"trade kraken BTC-USD",
+			"published trade kraken BTC-USD <nil>",
+			"update kraken ETH-USD 2/1",
+			"published book kraken ETH-USD nats: timeout",
+		}
+		if got := h.metrics.recorded(); !slices.Equal(got, want) {
+			t.Errorf("metrics calls:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
 	})
 }

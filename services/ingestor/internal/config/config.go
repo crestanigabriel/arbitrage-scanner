@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ const (
 	DefaultNATSURL       = "nats://localhost:4222"
 	DefaultKrakenWSURL   = "wss://ws.kraken.com/v2"
 	DefaultCoinbaseWSURL = "wss://advanced-trade-ws.coinbase.com"
+	DefaultHTTPAddr      = ":8080"
 	DefaultLogLevel      = "info"
 )
 
@@ -32,13 +34,15 @@ const (
 	EnvNATSURL        = "NATS_URL"
 	EnvKrakenWSURL    = "KRAKEN_WS_URL"
 	EnvCoinbaseWSURL  = "COINBASE_WS_URL"
+	EnvHTTPAddr       = "HTTP_ADDR"
 	EnvLogLevel       = "LOG_LEVEL"
 )
 
 // Variables lists every environment variable Load reads. deploy/ingestor.env documents each
 // of them, and a test keeps the two in step.
 var Variables = []string{
-	EnvSymbols, EnvBookDepth, EnvBookThrottleMS, EnvNATSURL, EnvKrakenWSURL, EnvCoinbaseWSURL, EnvLogLevel,
+	EnvSymbols, EnvBookDepth, EnvBookThrottleMS, EnvNATSURL, EnvKrakenWSURL, EnvCoinbaseWSURL,
+	EnvHTTPAddr, EnvLogLevel,
 }
 
 // Config is the validated configuration.
@@ -49,6 +53,7 @@ type Config struct {
 	NATSURL       string        // NATS_URL
 	KrakenWSURL   string        // KRAKEN_WS_URL
 	CoinbaseWSURL string        // COINBASE_WS_URL
+	HTTPAddr      string        // HTTP_ADDR: listen address of /metrics and /healthz, e.g. ":8080"
 	LogLevel      slog.Level    // LOG_LEVEL: debug, info, warn or error
 }
 
@@ -70,6 +75,12 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		NATSURL:       get(EnvNATSURL, DefaultNATSURL),
 		KrakenWSURL:   get(EnvKrakenWSURL, DefaultKrakenWSURL),
 		CoinbaseWSURL: get(EnvCoinbaseWSURL, DefaultCoinbaseWSURL),
+		HTTPAddr:      get(EnvHTTPAddr, DefaultHTTPAddr),
+	}
+	if _, port, err := net.SplitHostPort(cfg.HTTPAddr); err != nil {
+		errs = append(errs, fmt.Errorf("HTTP_ADDR: %w", err))
+	} else if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+		errs = append(errs, fmt.Errorf("HTTP_ADDR: %q is not a port number 1-65535", port))
 	}
 
 	depth, err := strconv.Atoi(get(EnvBookDepth, strconv.Itoa(DefaultBookDepth)))
