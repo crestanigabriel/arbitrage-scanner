@@ -27,11 +27,16 @@ type Level struct {
 	Quantity decimal.Decimal
 }
 
-// Book holds both sides of one order book, each sorted best first. It is not safe for
-// concurrent use; each book is owned by one goroutine.
+// Book holds both sides of one order book. It is not safe for concurrent use; each book is
+// owned by one goroutine.
+//
+// Each side is a sorted slice stored worst first, so the best price is at the end. Nearly all
+// updates land within a few levels of the best price, and at the end of a slice an insert or
+// a removal moves almost nothing. Stored best first, each one would shift the whole side,
+// which is tens of thousands of levels for a Coinbase book.
 type Book struct {
-	bids []Level // descending price
-	asks []Level // ascending price
+	bids []Level // ascending price: best (highest) last
+	asks []Level // descending price: best (lowest) last
 }
 
 // New returns an empty book.
@@ -41,12 +46,7 @@ func New() *Book { return &Book{} }
 // price that is not in the book does nothing.
 func (b *Book) Apply(side Side, price, quantity decimal.Decimal) {
 	levels := b.side(side)
-	i, found := slices.BinarySearchFunc(*levels, price, func(l Level, p decimal.Decimal) int {
-		if side == Bid {
-			return p.Cmp(l.Price) // descending
-		}
-		return l.Price.Cmp(p)
-	})
+	i, found := slices.BinarySearchFunc(*levels, price, worstFirst(side))
 	switch {
 	case quantity.IsZero() && found:
 		*levels = slices.Delete(*levels, i, i+1)
@@ -59,19 +59,73 @@ func (b *Book) Apply(side Side, price, quantity decimal.Decimal) {
 	}
 }
 
+// Load replaces the whole book with a snapshot, in any order. It is the same as Reset
+// followed by Apply for every level, in order: zero quantities are skipped, and the last
+// quantity given for a price wins. Sorting once makes it O(n log n) where Apply would be
+// O(n²) for a large best-first snapshot.
+func (b *Book) Load(bids, asks []Level) {
+	b.bids = load(b.bids[:0], Bid, bids)
+	b.asks = load(b.asks[:0], Ask, asks)
+}
+
+func load(dst []Level, side Side, levels []Level) []Level {
+	dst = append(dst, levels...)
+	cmp := worstFirst(side)
+	slices.SortStableFunc(dst, func(x, y Level) int { return cmp(x, y.Price) })
+	// Equal prices are adjacent and in input order: replay each run as Apply would. A zero
+	// removes the level, the next non-zero inserts it with its own price text, and later ones
+	// only change the quantity.
+	out := dst[:0]
+	for i := 0; i < len(dst); {
+		var cur Level
+		alive := false
+		j := i
+		for ; j < len(dst) && dst[j].Price.Cmp(dst[i].Price) == 0; j++ {
+			switch l := dst[j]; {
+			case l.Quantity.IsZero():
+				alive = false
+			case alive:
+				cur.Quantity = l.Quantity
+			default:
+				cur, alive = l, true
+			}
+		}
+		if alive {
+			out = append(out, cur)
+		}
+		i = j
+	}
+	return out
+}
+
+// worstFirst orders a side's levels against a price, worst first.
+func worstFirst(side Side) func(Level, decimal.Decimal) int {
+	if side == Bid {
+		return func(l Level, p decimal.Decimal) int { return l.Price.Cmp(p) } // ascending
+	}
+	return func(l Level, p decimal.Decimal) int { return p.Cmp(l.Price) } // descending
+}
+
 // Truncate keeps the best depth levels of each side and drops the rest.
 func (b *Book) Truncate(depth int) {
-	if len(b.bids) > depth {
-		b.bids = slices.Delete(b.bids, depth, len(b.bids))
+	if n := len(b.bids) - depth; n > 0 {
+		b.bids = slices.Delete(b.bids, 0, n)
 	}
-	if len(b.asks) > depth {
-		b.asks = slices.Delete(b.asks, depth, len(b.asks))
+	if n := len(b.asks) - depth; n > 0 {
+		b.asks = slices.Delete(b.asks, 0, n)
 	}
 }
 
-// Top returns copies of the best n levels of each side, or fewer when a side is thinner.
+// Top returns copies of the best n levels of each side, best first, or fewer when a side is
+// thinner.
 func (b *Book) Top(n int) (bids, asks []Level) {
-	return slices.Clone(b.bids[:min(n, len(b.bids))]), slices.Clone(b.asks[:min(n, len(b.asks))])
+	return top(b.bids, n), top(b.asks, n)
+}
+
+func top(levels []Level, n int) []Level {
+	out := slices.Clone(levels[len(levels)-min(n, len(levels)):])
+	slices.Reverse(out)
+	return out
 }
 
 // Len returns the number of levels on side.

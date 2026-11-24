@@ -1,7 +1,9 @@
 package book_test
 
 import (
+	"math/rand/v2"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/crestanigabriel/arbitrage-scanner/services/ingestor/internal/book"
@@ -177,5 +179,61 @@ func TestReset(t *testing.T) {
 	b.Reset()
 	if b.Len(book.Bid) != 0 || b.Len(book.Ask) != 0 {
 		t.Errorf("after Reset, Len = %d bids / %d asks, want 0 / 0", b.Len(book.Bid), b.Len(book.Ask))
+	}
+}
+
+// TestLoadMatchesApply checks Load against its definition, Reset then Apply in order, on
+// random snapshots: unsorted, with repeated prices (including "1.50" next to "1.5"), zero
+// quantities, and a zero that removes a level given earlier.
+func TestLoadMatchesApply(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // seeded test data, not a security value
+	prices := []string{"1", "1.5", "1.50", "2", "2.25", "3", "10", "10.0", "99.99", "100"}
+	quantities := []string{"0", "0.000", "1", "2.5", "3"}
+	pick := func(s []string) decimal.Decimal { return decimal.MustParse(s[rng.IntN(len(s))]) }
+	for i := range 500 {
+		var bids, asks []book.Level
+		for range rng.IntN(20) {
+			bids = append(bids, book.Level{Price: pick(prices), Quantity: pick(quantities)})
+		}
+		for range rng.IntN(20) {
+			asks = append(asks, book.Level{Price: pick(prices), Quantity: pick(quantities)})
+		}
+
+		want := book.New()
+		apply(want, []op{{book.Bid, "50", "1"}, {book.Ask, "51", "1"}}) // Load replaces this
+		want.Reset()
+		for _, l := range bids {
+			want.Apply(book.Bid, l.Price, l.Quantity)
+		}
+		for _, l := range asks {
+			want.Apply(book.Ask, l.Price, l.Quantity)
+		}
+		got := book.New()
+		apply(got, []op{{book.Bid, "50", "1"}, {book.Ask, "51", "1"}})
+		got.Load(bids, asks)
+
+		wb, wa := want.Top(100)
+		gb, ga := got.Top(100)
+		if !slices.Equal(render(gb), render(wb)) || !slices.Equal(render(ga), render(wa)) {
+			t.Fatalf("case %d: Load = %v / %v, Apply = %v / %v\nbids %v\nasks %v",
+				i, render(gb), render(ga), render(wb), render(wa), render(bids), render(asks))
+		}
+	}
+}
+
+func TestTruncateDeep(t *testing.T) {
+	b := book.New()
+	for i := range 150 {
+		p := decimal.MustParse(strconv.Itoa(1000 - i))
+		b.Apply(book.Bid, p, decimal.MustParse("1"))
+		b.Apply(book.Ask, decimal.MustParse(strconv.Itoa(1001+i)), decimal.MustParse("1"))
+	}
+	b.Truncate(100)
+	bids, asks := b.Top(1000)
+	if len(bids) != 100 || bids[0].Price.String() != "1000" || bids[99].Price.String() != "901" {
+		t.Errorf("bids after Truncate(100): %d levels, %v .. %v", len(bids), bids[0].Price, bids[len(bids)-1].Price)
+	}
+	if len(asks) != 100 || asks[0].Price.String() != "1001" || asks[99].Price.String() != "1100" {
+		t.Errorf("asks after Truncate(100): %d levels, %v .. %v", len(asks), asks[0].Price, asks[len(asks)-1].Price)
 	}
 }
