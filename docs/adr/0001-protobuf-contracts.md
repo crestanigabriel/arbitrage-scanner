@@ -66,7 +66,10 @@ Protobuf was chosen over the alternatives for these reasons:
 
 - **All book logic lives in the ingestor:**
   - It applies the exchange snapshot and updates, and verifies checksums and sequence numbers.
-  - It resubscribes when verification fails.
+  - It resubscribes when verification fails. Coinbase is the exception (amended in M3).
+    Its `sequence_num` counts every message of the connection, across all channels, so a gap
+    can't be traced to one book. The ingestor resets every Coinbase book and reconnects
+    instead.
   - It publishes only books that are in sync. While a book resyncs nothing is published, so the
     detector's staleness check takes that book out of detection.
 - **Each message is the complete top of the book.** The detector replaces its copy with the
@@ -89,6 +92,9 @@ Protobuf was chosen over the alternatives for these reasons:
   - `MD_BOOKS` (`md.book.>`, memory storage) keeps one message per subject, since only the
     latest one matters. A consumer that starts or restarts reads the last message per subject,
     so it never waits for the next publish.
+  - A NATS restart drops a memory stream entirely, configuration included. The ingestor
+    recreates the streams when JetStream reports that no stream took a message, then
+    publishes again (amended in M3).
   - `MD_TRADES` (`md.trade.>`, file storage) keeps trades for 10 minutes, with a 2 minute
     duplicate window for `Nats-Msg-Id`.
 
@@ -143,6 +149,11 @@ The alternatives were rejected for these reasons:
 
 ### Other schema choices
 
+- **Symbols are canonical `BASE-QUOTE`** (`BTC-USD`) whatever the exchange calls them: Kraken's
+  `BTC/USD` is translated by its adapter. On Coinbase, `-USDC` products other than USDT-USDC
+  and EURC-USDC are aliases of the `-USD` book, and Coinbase reports their data under the
+  `-USD` product id. The Coinbase adapter rejects those symbols at startup, so the same book is
+  never published twice under two names (amended in M3).
 - **Exchange is a lowercase string** (`"kraken"`), not an enum. It is the same token used in the
   subjects. Adding a third exchange then touches only its adapter and `main.go`, with no schema
   change.

@@ -45,6 +45,7 @@ services/ingestor/                 Go module
   internal/ws/                     Conn/Dialer over WebSockets (the only WS library user)
   internal/clock/ (+ clocktest/)   Clock interface, real and fake clocks
   internal/{config,metrics}/
+  internal/httpserver/             /metrics and /healthz
 services/detector/                 Python (uv, src layout, Python 3.13 via uv)
   src/detector/domain/             pure logic: BookStore, VWAP, fees, Opportunity lifecycle
   src/detector/ports.py            Protocols: MarketFeed, Repository, Clock
@@ -121,21 +122,25 @@ Makefile       .github/workflows/ci.yml
 - **Done when:** `make lint test` passes, and `make up` + `make run-ingestor` publishes Kraken books and trades on `md.book.kraken.*` / `md.trade.kraken.*`.
 
 ### M3 — Coinbase adapter, metrics, container
-- Coinbase Advanced Trade WS (`wss://advanced-trade-ws.coinbase.com`, no auth, confirmed 2026-11-23):
-  - `level2` channel: the whole book (about 36k levels for BTC-USD) as a snapshot, then absolute `new_quantity` updates. There is no checksum, so gaps are detected with `sequence_num` and trigger a resubscribe.
+- Coinbase Advanced Trade WS (`wss://advanced-trade-ws.coinbase.com`, no auth; docs and live feed checked 2026-11-24):
+  - `level2` channel: the whole book (about 37k levels for BTC-USD) as one snapshot message of about 4 MB, then absolute `new_quantity` updates. Messages arrive on channel `l2_data`, with sides `bid` / `offer`.
+  - There is no checksum. `sequence_num` counts every message of the connection, across all channels, so a gap can't be traced to one book. It resets every book (`reason=sequence`) and reconnects, and the reconnect brings fresh snapshots.
+  - An unknown product gets no error: the subscriptions ack leaves it out. The adapter compares the last ack with what it asked for and stops on a mismatch.
   - `market_trades` channel (250 ms batches). Coinbase reports the *maker's* side, so invert it to the taker side.
-  - `heartbeats` channel so that idle subscriptions stay open. Respect the limit of 8 connections or messages per second per IP, and send a single channel per subscribe message.
+  - `heartbeats` channel so that idle subscriptions stay open. Respect the limit of 8 connections or messages per second per IP, and send a single channel per subscribe message. Subscribe within 5 s of connecting.
   - The ingestor keeps the whole book (Coinbase has no depth option) and publishes the top `BOOK_DEPTH` levels through the same throttle as Kraken.
-- Symbol normalization (`BTC/USD` / `BTC-USD` → canonical). Watch the USD vs USDC quote currency.
-- **Proof of the abstraction:** adding Coinbase changes only the adapter package and `main.go`.
-- Prometheus `/metrics`:
+- Symbols: a canonical symbol is the Coinbase product id (`BTC-USD`); Kraken's is `BTC/USD`. `-USDC` products are aliases of the `-USD` book (except USDT-USDC and EURC-USDC), so the Coinbase adapter rejects them at startup.
+- **Proof of the abstraction:** Coinbase adds its adapter package, its wiring in `main.go`, and one config variable (`COINBASE_WS_URL`). `book`, `pipeline`, `throttle`, `publish` and the `exchange` interfaces did not change for it. Shared transport gained two composable pieces: an idle-timeout `Conn` decorator, now used by both adapters, and a per-dialer WebSocket read limit for the 4 MB snapshot.
+- Prometheus `/metrics` (on `HTTP_ADDR`, default `:8080`), all counted in the pipeline from the events, so the adapters stay metric-free:
   - `updates_total{exchange,symbol}`, `books_published_total{exchange,symbol}` (their ratio shows what the throttle saves), `trades_total{exchange,symbol}`
-  - `reconnects_total`, `resyncs_total{reason}`
-  - `checksum_failures_total`, `sequence_gaps_total`
-  - `book_levels{exchange,symbol,side}` gauge
-  - publish latency histogram
-- `/healthz` endpoint. Multi-stage distroless Dockerfile, added to compose.
-- Go benchmarks for applying book updates.
+  - `resyncs_total{exchange,symbol,reason}`: one counter for every out-of-sync reason (checksum, sequence, protocol, reconnect), instead of separate `checksum_failures_total` / `sequence_gaps_total`
+  - `reconnects_total{exchange}`, from an observer injected into the Reconnector
+  - `book_levels{exchange,symbol,side}` gauge: the size of the *local* book, carried in `BookUpdate`
+  - `publish_duration_seconds{kind}` histogram and `publish_errors_total{kind}`
+- `/healthz` (200 while NATS is connected, 503 otherwise) and an `ingestor healthcheck` subcommand for the distroless image. Multi-stage distroless Dockerfile, added to compose. `make up` builds it, and CI builds it too.
+- Go benchmarks for applying book updates on a Coinbase-sized book. They led to storing each side worst first, so updates near the top move almost nothing, and to a bulk `Load` for snapshots.
+- Found while verifying: a NATS restart drops the memory-backed `MD_BOOKS` stream. The publisher now recreates the streams when JetStream reports that no stream took a message.
+- **Done when:** `make lint test` passes, and `make up` shows the ingestor healthy, both exchanges on `md.book.*` / `md.trade.*`, and the counters moving on `localhost:8080/metrics`.
 
 ### M4 — Python detector: pure domain (no IO)
 - `BookStore` holds the latest `OrderBook` per (exchange, symbol); each new one replaces the old.
