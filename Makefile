@@ -26,6 +26,9 @@ INGESTOR := services/ingestor
 DETECTOR := services/detector
 COMPOSE  := docker compose -f deploy/docker-compose.yml
 
+# Environment file read by `make run-ingestor`. Variables already set in the environment win.
+INGESTOR_ENV ?= deploy/ingestor.env
+
 # Output of `make gen`. Never edit these by hand.
 GEN_DIRS := $(INGESTOR)/internal/gen $(DETECTOR)/src/arbscanner
 
@@ -37,7 +40,7 @@ RANGE ?= origin/main..HEAD
 # Git ref that `make breaking` compares the protobuf schema against.
 BREAKING_REF ?= main
 
-.PHONY: help lint lint-go lint-py lint-proto test test-go test-py fmt up down gen breaking tools hooks check-commits
+.PHONY: help lint lint-go lint-py lint-proto test test-go test-py fmt up down run-ingestor gen breaking tools hooks check-commits
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -75,6 +78,9 @@ up: ## Start the local stack (waits for healthchecks)
 
 down: ## Stop the local stack
 	$(COMPOSE) down
+
+run-ingestor: ## Run the ingestor locally with INGESTOR_ENV (default deploy/ingestor.env); needs `make up`
+	cd $(INGESTOR) && sh $(CURDIR)/scripts/with-env.sh $(abspath $(INGESTOR_ENV)) go run ./cmd/ingestor
 
 gen: $(BUF) $(PROTOC_STAMP) ## Generate Go and Python code from the protobuf schema
 	rm -rf $(GEN_DIRS)

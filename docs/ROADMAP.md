@@ -100,7 +100,9 @@ Makefile       .github/workflows/ci.yml
 - Throttle per book with a leading and a trailing edge: publish the first change at once, fold later changes inside the interval into one publish at its end. Inject the `Clock` so tests control time.
 - Publish only books that are in sync; nothing is published while a book resyncs.
 - Publish to JetStream:
-  - Create the `MARKETDATA` stream (`md.>`) at startup: few messages per book subject (only the latest matters), short max age for trades, and a duplicate window.
+  - Create the streams at startup. JetStream limits apply per stream, so books and trades get one each:
+    - `MD_BOOKS` (`md.book.>`): one message per subject, since only the latest matters.
+    - `MD_TRADES` (`md.trade.>`): a short max age and a duplicate window.
   - `OrderBook`s on `md.book.<ex>.<sym>`.
   - `Trade`s on `md.trade.<ex>.<sym>`, with `Nats-Msg-Id` for deduplication.
 - Reconnect with exponential backoff and jitter. Graceful shutdown with `context` and `errgroup`.

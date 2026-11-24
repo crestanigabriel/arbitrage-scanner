@@ -53,6 +53,7 @@ jobs:
             go:
               - 'services/ingestor/**'
               - 'fixtures/contracts/**'
+              - 'deploy/ingestor.env' # read by a config test
               - 'Makefile'
               - '.github/workflows/ci.yml'
             python:

@@ -5,7 +5,7 @@ books of Kraken and Coinbase and publishes the top of each book (up to 100 level
 every trade to **NATS JetStream** as Protobuf. A **Python detector** finds arbitrage after fees
 and depth, and **Grafana** shows the pipeline and the opportunities.
 
-> **Status:** M1 — shared Protobuf contracts. See the [roadmap](docs/ROADMAP.md) for what comes
+> **Status:** M2 — Go ingestor streaming Kraken books and trades to JetStream. See the [roadmap](docs/ROADMAP.md) for what comes
 > next.
 
 ## Prerequisites
@@ -27,6 +27,43 @@ make up          # start the local stack (currently NATS with JetStream)
 make down        # stop it
 ```
 
+Run the ingestor against the local NATS (until it gets a container in M3):
+
+```sh
+make up
+make run-ingestor
+```
+
+It streams Kraken's public feed (no API key). It publishes the top of each book to
+`md.book.kraken.<symbol>` and every trade to `md.trade.kraken.<symbol>`, as Protobuf. Ctrl-C
+stops it cleanly.
+
+### Ingestor configuration
+
+All configuration comes from environment variables and is validated at startup. Every
+variable is optional and falls back to its default.
+
+`make run-ingestor` loads them from [`deploy/ingestor.env`](deploy/ingestor.env). That file
+lists every variable with its default, and you can edit it. Variables already set in your
+shell win over the file, and `INGESTOR_ENV` selects a different file:
+
+```sh
+BOOK_DEPTH=100 BOOK_THROTTLE_MS=0 make run-ingestor   # one-off override
+make run-ingestor INGESTOR_ENV=my.env                 # another file
+```
+
+A test checks that `deploy/ingestor.env` loads and lists exactly the variables below, so a
+misspelt name can't be ignored silently.
+
+| Variable           | Default                  | Meaning                                                        |
+|--------------------|--------------------------|----------------------------------------------------------------|
+| `SYMBOLS`          | `BTC-USD`                | Comma-separated canonical symbols, e.g. `BTC-USD,ETH-USD`      |
+| `BOOK_DEPTH`       | `50`                     | Levels per side in each published book, 1–100                  |
+| `BOOK_THROTTLE_MS` | `50`                     | Minimum interval between publishes of one book; 0 publishes every update |
+| `NATS_URL`         | `nats://localhost:4222`  | NATS server                                                    |
+| `KRAKEN_WS_URL`    | `wss://ws.kraken.com/v2` | Kraken WebSocket API v2 endpoint                               |
+| `LOG_LEVEL`        | `info`                   | `debug`, `info`, `warn` or `error`; logs are JSON on stderr     |
+
 ## Make targets
 
 | Target          | What it does                                                        |
@@ -36,6 +73,7 @@ make down        # stop it
 | `fmt`           | Auto-format Go, Python and protobuf code                            |
 | `up`            | `docker compose up -d --wait` for `deploy/docker-compose.yml`       |
 | `down`          | Stop the local stack                                                |
+| `run-ingestor`  | Run the ingestor locally with `deploy/ingestor.env` (needs `make up`) |
 | `gen`           | Regenerate Go and Python code from `proto/` (commit the result)     |
 | `breaking`      | `buf breaking` against `BREAKING_REF` (default `main`)              |
 | `tools`         | Install pinned tool binaries into `./bin`                           |

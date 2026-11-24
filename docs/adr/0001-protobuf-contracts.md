@@ -83,9 +83,14 @@ Protobuf was chosen over the alternatives for these reasons:
   1000 / `BOOK_THROTTLE_MS` messages per second.
 - **Message size:** 100 levels × 2 sides at about 24 bytes per level is about 5 KB per book. At
   50 ms that is about 100 KB/s per book, so the NATS defaults (1 MB payload) are fine.
-- **JetStream:** the `MARKETDATA` stream keeps few messages per book subject, since only the
-  latest one matters. A consumer that starts or restarts reads the last message per subject, so
-  it never waits for the next publish. Trades are kept for a short max age.
+- **JetStream:** books and trades go to two streams, because JetStream applies its retention
+  limits to a whole stream and the two need different ones. (Amended in M2. The first version
+  of this ADR named a single `MARKETDATA` stream.)
+  - `MD_BOOKS` (`md.book.>`, memory storage) keeps one message per subject, since only the
+    latest one matters. A consumer that starts or restarts reads the last message per subject,
+    so it never waits for the next publish.
+  - `MD_TRADES` (`md.trade.>`, file storage) keeps trades for 10 minutes, with a 2 minute
+    duplicate window for `Nats-Msg-Id`.
 
 The other options considered, and why they were rejected:
 
