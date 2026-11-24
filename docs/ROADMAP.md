@@ -34,11 +34,17 @@ services/ingestor/                 Go module
   cmd/ingestor/main.go             composition root
   internal/gen/                    generated Protobuf code (`make gen`)
   internal/contract/               cross-language golden tests for the contracts
+  internal/exchange/               MarketSource, Event, Conn/Dialer, Reconnector + Backoff
   internal/exchange/{kraken,coinbase,replay}/   adapters implementing MarketSource
-  internal/book/                   local order book, checksum, top-N view
+  internal/exchange/exchangetest/  scripted Conn and Dialer fakes for adapter tests
+  internal/book/                   local order book, top-N view
+  internal/decimal/                exact decimal text (parse, compare; no arithmetic)
   internal/throttle/               per-book publish throttle (leading + trailing edge)
+  internal/pipeline/               events → throttle → Publisher
   internal/publish/                Publisher interface + NATS JetStream impl
-  internal/{config,metrics,clock}/
+  internal/ws/                     Conn/Dialer over WebSockets (the only WS library user)
+  internal/clock/ (+ clocktest/)   Clock interface, real and fake clocks
+  internal/{config,metrics}/
 services/detector/                 Python (uv, src layout, Python 3.13 via uv)
   src/detector/domain/             pure logic: BookStore, VWAP, fees, Opportunity lifecycle
   src/detector/ports.py            Protocols: MarketFeed, Repository, Clock
@@ -48,11 +54,15 @@ services/detector/                 Python (uv, src layout, Python 3.13 via uv)
   tests/{unit,integration}/
 deploy/
   docker-compose.yml
+  ingestor.env                     ingestor configuration (`make run-ingestor`, compose)
   migrations/                      plain SQL (dbmate)
   prometheus/  loki/  alloy/  grafana/{provisioning,dashboards}/
 fixtures/contracts/                Protobuf golden files read by both services' tests
 fixtures/recordings/               captured raw feeds for replay
 docs/  ARCHITECTURE_PRINCIPLES.md, architecture.md, adr/
+scripts/                           commit message check, env file loader
+.githooks/                         commit-msg hook (`make hooks`)
+bin/                               pinned tool binaries, downloaded by make (gitignored)
 Makefile       .github/workflows/ci.yml
 ```
 
@@ -108,6 +118,7 @@ Makefile       .github/workflows/ci.yml
 - Reconnect with exponential backoff and jitter. Graceful shutdown with `context` and `errgroup`.
 - Logging with `log/slog` in JSON, injected.
 - Tests: table-driven book tests (including depth truncation), checksum tests against recorded Kraken frames, throttle tests with a fake clock, adapter tests over a fake `Conn`, and `go test -race`.
+- **Done when:** `make lint test` passes, and `make up` + `make run-ingestor` publishes Kraken books and trades on `md.book.kraken.*` / `md.trade.kraken.*`.
 
 ### M3 — Coinbase adapter, metrics, container
 - Coinbase Advanced Trade WS (`wss://advanced-trade-ws.coinbase.com`, no auth, confirmed 2026-11-23):

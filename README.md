@@ -5,8 +5,8 @@ books of Kraken and Coinbase and publishes the top of each book (up to 100 level
 every trade to **NATS JetStream** as Protobuf. A **Python detector** finds arbitrage after fees
 and depth, and **Grafana** shows the pipeline and the opportunities.
 
-> **Status:** M2 — Go ingestor streaming Kraken books and trades to JetStream. See the [roadmap](docs/ROADMAP.md) for what comes
-> next.
+> **Status:** M2 — Go ingestor streaming Kraken books and trades to JetStream. See the
+> [roadmap](docs/ROADMAP.md) for what comes next.
 
 ## Prerequisites
 
@@ -68,6 +68,7 @@ misspelt name can't be ignored silently.
 
 | Target          | What it does                                                        |
 |-----------------|---------------------------------------------------------------------|
+| `help`          | List the targets (the default goal)                                 |
 | `lint`          | `lint-go` (golangci-lint), `lint-py` (ruff, ty), `lint-proto` (buf) |
 | `test`          | `test-go` (`go test -race`) + `test-py` (pytest)                    |
 | `fmt`           | Auto-format Go, Python and protobuf code                            |
@@ -87,9 +88,9 @@ proto/               Protobuf contracts shared by both services (see ADR-001)
 services/ingestor/   Go module: exchange adapters → maintained books + trades → NATS
 services/detector/   Python (uv): consumes books and trades, detects and tracks opportunities
 fixtures/            test data shared across services (Protobuf golden files)
-deploy/              docker-compose and, later, migrations and observability config
+deploy/              docker-compose, ingestor.env and, later, migrations and observability config
 docs/                roadmap, architecture principles, ADRs
-scripts/             repo tooling (commit message check)
+scripts/             repo tooling (commit message check, env file loader for `make run-ingestor`)
 .githooks/           git hooks, enabled with `make hooks`
 ```
 
