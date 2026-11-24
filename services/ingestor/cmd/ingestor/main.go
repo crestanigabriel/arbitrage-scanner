@@ -95,7 +95,7 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	if err := publish.EnsureStreams(ctx, js); err != nil {
 		return err
 	}
-	publisher := publish.NewJetStream(js)
+	publisher := publish.NewJetStream(js, js)
 
 	backoff := exchange.NewBackoff(reconnectBase, reconnectMax, rand.N[time.Duration]) // jitter, not a security value
 	connector := exchange.NewReconnector(cfg.KrakenWSURL, ws.Dialer{}, clk, backoff, log.With("exchange", kraken.Exchange))

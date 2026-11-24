@@ -89,13 +89,17 @@ type MsgPublisher interface {
 
 // JetStream is the Publisher for NATS JetStream.
 type JetStream struct {
-	js MsgPublisher
+	js      MsgPublisher
+	streams StreamManager
 }
 
 var _ Publisher = (*JetStream)(nil)
 
-// NewJetStream returns a Publisher that sends through js.
-func NewJetStream(js MsgPublisher) *JetStream { return &JetStream{js: js} }
+// NewJetStream returns a Publisher that sends through js. It recreates the streams through sm
+// when they are gone: a NATS restart drops the memory-backed MD_BOOKS stream.
+func NewJetStream(js MsgPublisher, sm StreamManager) *JetStream {
+	return &JetStream{js: js, streams: sm}
+}
 
 // PublishBook implements Publisher.
 func (p *JetStream) PublishBook(ctx context.Context, b *marketdatav1.OrderBook) error {
@@ -125,7 +129,17 @@ func (p *JetStream) publish(ctx context.Context, subject string, m proto.Message
 	if err != nil {
 		return fmt.Errorf("marshal for %s: %w", subject, err)
 	}
-	if _, err := p.js.PublishMsg(ctx, &nats.Msg{Subject: subject, Data: data}, opts...); err != nil {
+	_, err = p.js.PublishMsg(ctx, &nats.Msg{Subject: subject, Data: data}, opts...)
+	if errors.Is(err, jetstream.ErrNoStreamResponse) {
+		// No stream took the message: it was deleted, or lost with a NATS restart (memory
+		// storage). Recreate the streams and try once more. A retried trade keeps its
+		// Nats-Msg-Id, so it cannot be stored twice.
+		if serr := EnsureStreams(ctx, p.streams); serr != nil {
+			return fmt.Errorf("publish %s: %w", subject, errors.Join(err, serr))
+		}
+		_, err = p.js.PublishMsg(ctx, &nats.Msg{Subject: subject, Data: data}, opts...)
+	}
+	if err != nil {
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}
 	return nil

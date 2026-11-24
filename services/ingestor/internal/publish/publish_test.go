@@ -52,7 +52,7 @@ func setup(t *testing.T) (context.Context, jetstream.JetStream, *publish.JetStre
 	if err := publish.EnsureStreams(ctx, js); err != nil {
 		t.Fatalf("EnsureStreams() error = %v", err)
 	}
-	return ctx, js, publish.NewJetStream(js)
+	return ctx, js, publish.NewJetStream(js, js)
 }
 
 func TestEnsureStreams(t *testing.T) {
@@ -163,5 +163,25 @@ func TestSubject(t *testing.T) {
 		if _, err := publish.Subject("book", "kraken", bad); err == nil {
 			t.Errorf("Subject(%q) succeeded, want an error", bad)
 		}
+	}
+}
+
+// TestPublishRecreatesLostStreams covers a NATS restart, which drops the memory-backed books
+// stream: the next publish recreates it instead of failing until the ingestor restarts.
+func TestPublishRecreatesLostStreams(t *testing.T) {
+	ctx, js, pub := setup(t)
+	if err := js.DeleteStream(ctx, publish.BooksStream); err != nil {
+		t.Fatal(err)
+	}
+	b := &marketdatav1.OrderBook{Exchange: "kraken", Symbol: "BTC-USD", Sequence: 1}
+	if err := pub.PublishBook(ctx, b); err != nil {
+		t.Fatalf("PublishBook() after the stream was lost = %v, want it recreated", err)
+	}
+	stream, err := js.Stream(ctx, publish.BooksStream)
+	if err != nil {
+		t.Fatalf("stream %s not recreated: %v", publish.BooksStream, err)
+	}
+	if n := stream.CachedInfo().State.Msgs; n != 1 {
+		t.Errorf("%s holds %d messages, want the retried book", publish.BooksStream, n)
 	}
 }
