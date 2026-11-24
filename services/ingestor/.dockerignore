@@ -1,0 +1,8 @@
+# Only what `go build` needs goes into the build context.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+**/*_test.go
+**/testdata/

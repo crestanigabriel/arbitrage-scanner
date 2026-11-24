@@ -40,7 +40,7 @@ RANGE ?= origin/main..HEAD
 # Git ref that `make breaking` compares the protobuf schema against.
 BREAKING_REF ?= main
 
-.PHONY: help lint lint-go lint-py lint-proto test test-go test-py fmt up down run-ingestor gen breaking tools hooks check-commits
+.PHONY: help lint lint-go lint-py lint-proto test test-go test-py fmt up up-nats down run-ingestor gen breaking tools hooks check-commits
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -73,13 +73,16 @@ fmt: $(GOLANGCI_LINT) $(BUF) ## Auto-format Go, Python and protobuf code
 	cd $(DETECTOR) && uv run --locked ruff format .
 	$(BUF) format --write
 
-up: ## Start the local stack (waits for healthchecks)
-	$(COMPOSE) up -d --wait
+up: ## Build and start the local stack (waits for healthchecks)
+	$(COMPOSE) up -d --wait --build
+
+up-nats: ## Start only NATS, for `make run-ingestor`
+	$(COMPOSE) up -d --wait nats
 
 down: ## Stop the local stack
 	$(COMPOSE) down
 
-run-ingestor: ## Run the ingestor locally with INGESTOR_ENV (default deploy/ingestor.env); needs `make up`
+run-ingestor: ## Run the ingestor locally with INGESTOR_ENV (default deploy/ingestor.env); needs NATS (`make up-nats`)
 	cd $(INGESTOR) && sh $(CURDIR)/scripts/with-env.sh $(abspath $(INGESTOR_ENV)) go run ./cmd/ingestor
 
 gen: $(BUF) $(PROTOC_STAMP) ## Generate Go and Python code from the protobuf schema

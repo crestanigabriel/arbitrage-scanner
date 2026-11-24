@@ -18,5 +18,26 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  ingestor:
+    build: ../services/ingestor
+    image: arbscanner-ingestor:dev
+    env_file: ingestor.env
+    environment:
+      NATS_URL: nats://nats:4222 # the compose service, not localhost
+    depends_on:
+      nats:
+        condition: service_healthy
+    ports:
+      - "8080:8080" # /metrics and /healthz
+    # The image's HEALTHCHECK runs `/ingestor healthcheck`. It is repeated here so that
+    # `make up --wait` uses the same timings.
+    healthcheck:
+      test: ["CMD", "/ingestor", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
 volumes:
   nats-data:
