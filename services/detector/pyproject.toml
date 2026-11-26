@@ -13,6 +13,7 @@ detector = "detector.main:main"
 
 [dependency-groups]
 dev = [
+  "hypothesis>=6.170.17",
   "pytest>=9.2",
   "ruff>=0.17.6",
   "ty>=0.0.108",
@@ -66,6 +67,8 @@ error-on-warning = true
 # --- pytest ---------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Shared test helpers (fakes, builders, hypothesis strategies) are imported from tests/.
+pythonpath = ["tests"]
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 markers = [
   "integration: needs real infrastructure (containers, network)",
