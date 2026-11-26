@@ -5,7 +5,8 @@ books of Kraken and Coinbase and publishes the top of each book (up to 100 level
 every trade to **NATS JetStream** as Protobuf. A **Python detector** finds arbitrage after fees
 and depth, and **Grafana** shows the pipeline and the opportunities.
 
-> **Status:** M3 — Go ingestor streaming Kraken and Coinbase books and trades to JetStream, with
+> **Status:** M4 in progress: the detector's pure domain (VWAP, fees, staleness, opportunity
+> lifecycle). The Go ingestor streams Kraken and Coinbase books and trades to JetStream, with
 > Prometheus metrics and a container. See the [roadmap](docs/ROADMAP.md) for what comes next.
 
 ## Prerequisites
@@ -66,6 +67,7 @@ misspelt name can't be ignored silently.
 | `SYMBOLS`          | `BTC-USD`                | Comma-separated canonical symbols, e.g. `BTC-USD,ETH-USD`      |
 | `BOOK_DEPTH`       | `50`                     | Levels per side in each published book, 1–100                  |
 | `BOOK_THROTTLE_MS` | `50`                     | Minimum interval between publishes of one book; 0 publishes every update |
+| `BOOK_KEEPALIVE_MS`| `1000`                   | Publish an unchanged book again after this long; 0 or ≥ `BOOK_THROTTLE_MS`, 0 turns it off |
 | `NATS_URL`         | `nats://localhost:4222`  | NATS server                                                    |
 | `KRAKEN_WS_URL`    | `wss://ws.kraken.com/v2` | Kraken WebSocket API v2 endpoint                               |
 | `COINBASE_WS_URL`  | `wss://advanced-trade-ws.coinbase.com` | Coinbase Advanced Trade WebSocket endpoint       |
@@ -84,7 +86,7 @@ container.
 | Metric                                      | Type      | Meaning                                                    |
 |---------------------------------------------|-----------|------------------------------------------------------------|
 | `updates_total{exchange,symbol}`            | counter   | In-sync book updates received, before the throttle          |
-| `books_published_total{exchange,symbol}`    | counter   | OrderBooks published; the ratio to `updates_total` is what the throttle saves |
+| `books_published_total{exchange,symbol}`    | counter   | OrderBooks published, keepalives included; the ratio to `updates_total` is what the throttle saves |
 | `trades_total{exchange,symbol}`             | counter   | Trades received                                            |
 | `resyncs_total{exchange,symbol,reason}`     | counter   | Books taken out of sync: `checksum` (Kraken), `sequence` (Coinbase), `protocol`, `reconnect` |
 | `reconnects_total{exchange}`                | counter   | Connections lost or dials failed                           |

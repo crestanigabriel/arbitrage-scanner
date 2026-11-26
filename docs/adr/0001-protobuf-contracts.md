@@ -14,7 +14,7 @@ docs and the live feeds on 2026-11-23 for BTC-USD:
 
 | | Kraken WS v2 | Coinbase Advanced Trade WS |
 |---|---|---|
-| Book | `book`, depth 10/25/100/500/1000 per side; snapshot, then absolute updates; CRC32 over the top 10 | `level2`, the whole book (about 36k levels); snapshot, then absolute updates; `sequence_num` |
+| Book | `book`, depth 10/25/100/500/1000 per side; snapshot, then absolute updates; CRC32 over the top 10 | `level2`, the whole book (about 37k levels); snapshot, then absolute updates; `sequence_num` |
 | Rate seen | about 240 book messages/s at depth 1000, real time | about 19 events/s, batched at roughly 50 ms |
 | Trades | `trade`, taker side | `market_trades`, maker side, 250 ms batches |
 | Needs auth | only `level3` (individual orders) | only `user` and `futures_balance_summary` |
@@ -61,7 +61,7 @@ Protobuf was chosen over the alternatives for these reasons:
 
 | Subject | Message | When |
 |---|---|---|
-| `md.book.<exchange>.<symbol>` | `OrderBook`: the top `BOOK_DEPTH` levels per side | at most once per `BOOK_THROTTLE_MS` per book, always the latest state |
+| `md.book.<exchange>.<symbol>` | `OrderBook`: the top `BOOK_DEPTH` levels per side | at most once per `BOOK_THROTTLE_MS` per book, always the latest state; again every `BOOK_KEEPALIVE_MS` while it doesn't change |
 | `md.trade.<exchange>.<symbol>` | `Trade` | every trade, not throttled |
 
 - **All book logic lives in the ingestor:**
@@ -78,12 +78,23 @@ Protobuf was chosen over the alternatives for these reasons:
 - **Configuration lives in the ingestor, because that is where books are built:**
   - `BOOK_DEPTH`: levels per side, default 50, maximum 100. It is validated at startup.
   - `BOOK_THROTTLE_MS`: default 50, and 0 publishes on every update.
+  - `BOOK_KEEPALIVE_MS`: default 1000, and 0 turns the keepalive off. It is either 0 or at
+    least `BOOK_THROTTLE_MS`.
   - The ingestor subscribes at the smallest exchange depth that covers `BOOK_DEPTH`. That is
     Kraken depth 100 for both 50 and 100. Coinbase always sends the whole book.
 - **The throttle** has both a leading and a trailing edge. The first change after a quiet
   interval is published at once. Later changes in the same interval are folded into one publish
   at its end. A book is never more than one interval out of date, and a busy book costs at most
   1000 / `BOOK_THROTTLE_MS` messages per second.
+- **The keepalive** (amended in M4): a book that hasn't changed for `BOOK_KEEPALIVE_MS` is
+  published again, unchanged, with a new `sequence` and `published_ts`. Without it a quiet but
+  healthy book would look just like a lost feed, because both stop publishing.
+  - `published_ts` therefore means "this book was in sync at this time", and consumers measure
+    staleness from it. `exchange_ts` and `received_ts` stay those of the latest update.
+  - A book that goes out of sync stops its keepalive at once, like its held changes.
+  - A connection that hangs without closing is only noticed by the adapters' idle timeout
+    (10 s, against heartbeats every second). That bounds how long keepalives can vouch for a
+    feed that is already dead.
 - **Message size:** 100 levels × 2 sides at about 24 bytes per level is about 5 KB per book. At
   50 ms that is about 100 KB/s per book, so the NATS defaults (1 MB payload) are fine.
 - **JetStream:** books and trades go to two streams, because JetStream applies its retention

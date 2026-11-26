@@ -34,7 +34,7 @@ services/ingestor/                 Go module
   cmd/ingestor/main.go             composition root
   internal/gen/                    generated Protobuf code (`make gen`)
   internal/contract/               cross-language golden tests for the contracts
-  internal/exchange/               MarketSource, Event, Conn/Dialer, Reconnector + Backoff
+  internal/exchange/               MarketSource, Event, Conn/Dialer, Reconnector + Backoff, idle-timeout Conn
   internal/exchange/{kraken,coinbase,replay}/   adapters implementing MarketSource
   internal/exchange/exchangetest/  scripted Conn and Dialer fakes for adapter tests
   internal/book/                   local order book, top-N view
@@ -48,7 +48,7 @@ services/ingestor/                 Go module
   internal/httpserver/             /metrics and /healthz
 services/detector/                 Python (uv, src layout, Python 3.13 via uv)
   src/detector/domain/             pure logic: BookStore, VWAP, fees, Opportunity lifecycle
-  src/detector/ports.py            Protocols: MarketFeed, Repository, Clock
+  src/detector/ports.py            Protocols: Clock (M4), MarketFeed, Repository (M5)
   src/detector/adapters/{nats,postgres}/
   src/detector/main.py             composition root
   src/arbscanner/                  generated Protobuf code (`make gen`)
@@ -68,6 +68,8 @@ Makefile       .github/workflows/ci.yml
 ```
 
 ## Milestones
+
+**Status:** M0–M3 done. M4 in progress.
 
 ### M0 — Foundations
 - Create the layout above, plus `.gitignore`, `.editorconfig`, README skeleton, and a `Makefile` with `.PHONY` targets `lint`, `test`, `up`, `down`, `gen` (kept compatible with the GNU Make 3.81 that ships with macOS; CI calls the same targets).
@@ -143,21 +145,30 @@ Makefile       .github/workflows/ci.yml
 - **Done when:** `make lint test` passes, and `make up` shows the ingestor healthy, both exchanges on `md.book.*` / `md.trade.*`, and the counters moving on `localhost:8080/metrics`.
 
 ### M4 — Python detector: pure domain (no IO)
-- `BookStore` holds the latest `OrderBook` per (exchange, symbol); each new one replaces the old.
+- Ingestor keepalive, so that staleness means a lost feed and not a quiet book:
+  - The throttle publishes a book again, unchanged, after `BOOK_KEEPALIVE_MS` (default 1000; 0 turns it off) without a change. It gets a new `sequence` and `published_ts`.
+  - A book that goes out of sync stops its keepalive along with its held changes.
+  - The `pipeline.Throttle` interface does not change. See the M4 amendment in ADR-001.
+- The domain has its own types (`Book`, `Level`, `Trade`) and never imports the generated Protobuf code. The mapping from Protobuf is the M5 adapter's job.
+- `BookStore` holds the latest book per (exchange, symbol); each new one replaces the old. A book older than the stored one (by `published_ts`) is ignored and reported, for the M5 out-of-order counter.
 - Keep the recent trades per book, for context in the opportunity records and as a sanity check.
 - Detection: for each pair of exchanges, check buying on A's asks and selling on B's bids.
   - Walk the book depth to get the VWAP for a configured notional. If the published levels don't cover the notional, report insufficient liquidity rather than guessing.
   - Subtract per-exchange taker fees.
   - Keep the opportunity if net spread ≥ threshold in bps.
-- Reject quotes older than `max_staleness_ms` by the injected `Clock`.
+- Reject books whose `published_ts` is older than `max_staleness_ms` by the injected `Clock`.
 - An `OpportunityTracker` state machine moves each opportunity through open → update (peak spread, quantity, notional) → close (duration).
-- Tests: pytest plus **hypothesis** property tests (e.g. no opportunity when books are identical; net spread decreases as fees grow; VWAP lies between the best and worst price walked).
+  - An opportunity is keyed by (symbol, buy exchange, sell exchange).
+  - It closes as soon as its net spread falls below the threshold, or a leg goes stale or lacks liquidity. There is no hysteresis.
+- Tests: pytest plus **hypothesis** property tests (e.g. no opportunity when books are identical; net spread decreases as fees grow; VWAP lies between the best and worst price walked). A boundary test checks that the domain imports no IO or Protobuf modules.
+- **Done when:** `make lint test` passes; every domain component is tested with injected fakes only; and `make up` shows an unchanged book still published about once a second (`books_published_total` rising while `updates_total` stalls).
 
 ### M5 — Detector wiring and end-to-end flow
 - `ports.py` Protocols, with a JetStream adapter (nats-py, asyncio) for `MarketFeed`:
   - Books from `md.book.>`, starting from the last message per subject so a restart has every book at once.
   - Trades from `md.trade.>`.
 - Composition root in `main.py`; pydantic-settings for config; structlog for JSON logs. Opportunities are logged until M6 stores them.
+- Detector config: the notional to walk, threshold in bps, taker fee per exchange, and `MAX_STALENESS_MS`. That last one defaults to 3000, three ingestor keepalives.
 - Prometheus metrics:
   - `books_received_total{exchange,symbol}`, `books_out_of_order_total` (from `sequence`)
   - detection latency histogram
@@ -183,7 +194,7 @@ Makefile       .github/workflows/ci.yml
   - dashboard "Market": live spreads per pair, from Timescale
   - dashboard "Opportunities": table, counts, duration distribution
   - a logs panel
-- Optionally, a couple of alert rules (feed stale, checksum failures).
+- Optionally, a couple of alert rules (feed stale, resyncs from `resyncs_total`).
 
 ### M8 — Record and replay
 - Ingestor `--record` writes raw frames as NDJSON. A `replay` adapter implements `MarketSource` from a file, at original or accelerated speed.
