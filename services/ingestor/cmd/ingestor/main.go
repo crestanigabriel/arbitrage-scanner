@@ -172,7 +172,7 @@ func run(ctx context.Context, lookupEnv func(string) (string, bool), logOut io.W
 	}
 	sources := []exchange.MarketSource{krakenSource, coinbaseSource}
 
-	bookThrottle := throttle.New[pipeline.BookKey, exchange.BookUpdate](clk, cfg.BookThrottle)
+	bookThrottle := throttle.New[pipeline.BookKey, exchange.BookUpdate](clk, cfg.BookThrottle, cfg.BookKeepalive)
 	pipe := pipeline.New(publisher, bookThrottle, m, clk, uint32(cfg.BookDepth), log) //nolint:gosec // 1-100, validated by config
 
 	health := httpserver.CheckFunc(func() error {

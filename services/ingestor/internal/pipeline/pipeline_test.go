@@ -101,7 +101,13 @@ type harness struct {
 	done    chan error
 }
 
+// runPipeline runs a pipeline with the throttle interval and no keepalive.
 func runPipeline(ctx context.Context, t *testing.T) *harness {
+	t.Helper()
+	return runPipelineKeepalive(ctx, t, 0)
+}
+
+func runPipelineKeepalive(ctx context.Context, t *testing.T, keepalive time.Duration) *harness {
 	t.Helper()
 	h := &harness{
 		clock:   clocktest.NewFake(t0),
@@ -110,7 +116,7 @@ func runPipeline(ctx context.Context, t *testing.T) *harness {
 		in:      make(chan exchange.Event),
 		done:    make(chan error, 1),
 	}
-	th := throttle.New[pipeline.BookKey, exchange.BookUpdate](h.clock, interval)
+	th := throttle.New[pipeline.BookKey, exchange.BookUpdate](h.clock, interval, keepalive)
 	p := pipeline.New(h.pub, th, h.metrics, h.clock, 50, slog.New(slog.DiscardHandler))
 	go func() { h.done <- p.Run(ctx, h.in) }()
 	return h
@@ -215,6 +221,52 @@ func TestBookResetDropsHeldBook(t *testing.T) {
 		h.send(update("BTC-USD", "3"))
 		if got, want := h.pub.published(), []string{"BTC-USD#1:1", "BTC-USD#2:3"}; !slices.Equal(got, want) {
 			t.Errorf("published %v, want %v", got, want)
+		}
+	})
+}
+
+func TestKeepaliveRepublishesUnchangedBook(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := runPipelineKeepalive(t.Context(), t, time.Second)
+
+		h.send(update("BTC-USD", "1"))
+		h.advance(999 * time.Millisecond)
+		if got := h.pub.published(); len(got) != 1 {
+			t.Fatalf("published %v before the keepalive ended, want 1", got)
+		}
+		h.advance(time.Millisecond)
+		h.advance(time.Second)
+
+		if got, want := h.pub.published(), []string{"BTC-USD#1:1", "BTC-USD#2:1", "BTC-USD#3:1"}; !slices.Equal(got, want) {
+			t.Fatalf("published %v, want %v", got, want)
+		}
+		// A keepalive is the same book: only its sequence and publish time are new.
+		first, again := h.pub.books[0], h.pub.books[2]
+		if got, want := again.GetPublishedTs().AsTime(), t0.Add(2*time.Second); !got.Equal(want) {
+			t.Errorf("keepalive published_ts = %v, want %v", got, want)
+		}
+		if !again.GetReceivedTs().AsTime().Equal(first.GetReceivedTs().AsTime()) ||
+			!again.GetExchangeTs().AsTime().Equal(first.GetExchangeTs().AsTime()) {
+			t.Errorf("keepalive changed received_ts / exchange_ts: %v / %v, want %v / %v",
+				again.GetReceivedTs().AsTime(), again.GetExchangeTs().AsTime(),
+				first.GetReceivedTs().AsTime(), first.GetExchangeTs().AsTime())
+		}
+	})
+}
+
+func TestBookResetStopsKeepalive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := runPipelineKeepalive(t.Context(), t, time.Second)
+
+		h.send(update("BTC-USD", "1"))
+		h.send(exchange.BookReset{Exchange: "kraken", Symbol: "BTC-USD", Reason: exchange.ResetReconnect})
+		h.advance(5 * time.Second)
+
+		if got, want := h.pub.published(), []string{"BTC-USD#1:1"}; !slices.Equal(got, want) {
+			t.Errorf("published %v, want %v: an out-of-sync book is never republished", got, want)
+		}
+		if h.clock.Pending() != 0 {
+			t.Errorf("%d timers armed for a book that is out of sync", h.clock.Pending())
 		}
 	})
 }

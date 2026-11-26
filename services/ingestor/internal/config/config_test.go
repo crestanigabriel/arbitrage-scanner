@@ -28,6 +28,7 @@ func TestDefaults(t *testing.T) {
 	want := config.Config{
 		BookDepth:     50,
 		BookThrottle:  50 * time.Millisecond,
+		BookKeepalive: time.Second,
 		Symbols:       []string{"BTC-USD"},
 		NATSURL:       "nats://localhost:4222",
 		KrakenWSURL:   "wss://ws.kraken.com/v2",
@@ -42,14 +43,15 @@ func TestDefaults(t *testing.T) {
 
 func TestOverrides(t *testing.T) {
 	cfg, err := config.Load(env(map[string]string{
-		"BOOK_DEPTH":       "100",
-		"BOOK_THROTTLE_MS": "0",
-		"SYMBOLS":          " BTC-USD, ETH-USD ",
-		"NATS_URL":         "nats://nats:4222",
-		"KRAKEN_WS_URL":    "ws://localhost:9999",
-		"COINBASE_WS_URL":  "ws://localhost:9998",
-		"HTTP_ADDR":        "127.0.0.1:9100",
-		"LOG_LEVEL":        "DEBUG",
+		"BOOK_DEPTH":        "100",
+		"BOOK_THROTTLE_MS":  "0",
+		"BOOK_KEEPALIVE_MS": "0",
+		"SYMBOLS":           " BTC-USD, ETH-USD ",
+		"NATS_URL":          "nats://nats:4222",
+		"KRAKEN_WS_URL":     "ws://localhost:9999",
+		"COINBASE_WS_URL":   "ws://localhost:9998",
+		"HTTP_ADDR":         "127.0.0.1:9100",
+		"LOG_LEVEL":         "DEBUG",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -57,6 +59,7 @@ func TestOverrides(t *testing.T) {
 	want := config.Config{
 		BookDepth:     100,
 		BookThrottle:  0,
+		BookKeepalive: 0,
 		Symbols:       []string{"BTC-USD", "ETH-USD"},
 		NATSURL:       "nats://nats:4222",
 		KrakenWSURL:   "ws://localhost:9999",
@@ -88,6 +91,12 @@ func TestInvalid(t *testing.T) {
 		{map[string]string{"BOOK_DEPTH": "101"}, []string{"BOOK_DEPTH: 101 is out of range"}},
 		{map[string]string{"BOOK_DEPTH": "fifty"}, []string{"BOOK_DEPTH: not an integer"}},
 		{map[string]string{"BOOK_THROTTLE_MS": "-1"}, []string{"BOOK_THROTTLE_MS: -1 is negative"}},
+		{map[string]string{"BOOK_KEEPALIVE_MS": "-1"}, []string{"BOOK_KEEPALIVE_MS: -1 is negative"}},
+		{map[string]string{"BOOK_KEEPALIVE_MS": "1s"}, []string{"BOOK_KEEPALIVE_MS: not an integer"}},
+		{
+			map[string]string{"BOOK_THROTTLE_MS": "500", "BOOK_KEEPALIVE_MS": "100"},
+			[]string{"BOOK_KEEPALIVE_MS: 100 is shorter than BOOK_THROTTLE_MS (500)"},
+		},
 		{map[string]string{"SYMBOLS": "BTC/USD"}, []string{`"BTC/USD" is not a canonical`}},
 		{map[string]string{"SYMBOLS": "btc-usd"}, []string{`"btc-usd" is not a canonical`}},
 		{map[string]string{"SYMBOLS": "BTC-USD,"}, []string{`"" is not a canonical`}},
@@ -118,6 +127,7 @@ func TestInvalid(t *testing.T) {
 
 func equal(a, b config.Config) bool {
 	return a.BookDepth == b.BookDepth && a.BookThrottle == b.BookThrottle &&
+		a.BookKeepalive == b.BookKeepalive &&
 		slices.Equal(a.Symbols, b.Symbols) && a.NATSURL == b.NATSURL &&
 		a.KrakenWSURL == b.KrakenWSURL && a.CoinbaseWSURL == b.CoinbaseWSURL &&
 		a.HTTPAddr == b.HTTPAddr && a.LogLevel == b.LogLevel
@@ -159,5 +169,15 @@ func TestEnvFile(t *testing.T) {
 	}
 	if _, err := config.Load(env(values)); err != nil {
 		t.Errorf("ingestor.env does not load: %v", err)
+	}
+}
+
+func TestKeepaliveEqualToThrottle(t *testing.T) {
+	cfg, err := config.Load(env(map[string]string{"BOOK_THROTTLE_MS": "500", "BOOK_KEEPALIVE_MS": "500"}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.BookKeepalive != 500*time.Millisecond {
+		t.Errorf("BookKeepalive = %v, want 500ms", cfg.BookKeepalive)
 	}
 }

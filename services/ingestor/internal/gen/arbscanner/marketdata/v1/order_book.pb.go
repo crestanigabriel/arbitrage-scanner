@@ -19,6 +19,11 @@
 // the latest state. Changes inside an interval are sent when it ends, so the newest book is
 // never held back by more than one interval. Depth and interval are ingestor configuration.
 //
+// A book that doesn't change is published again, unchanged, after a keepalive interval (also
+// ingestor configuration), with a new sequence and published_ts. A quiet book therefore keeps
+// arriving, and a consumer measures staleness from published_ts: a book that stops arriving is
+// out of sync or its feed is lost.
+//
 // Decimal values are strings so that no precision is lost in transit.
 // Format: ^[0-9]+(\.[0-9]+)?$ (no sign, no exponent, no thousands separator, "." as the decimal
 // point). Trailing zeros may be present and are not significant. Consumers parse them with an
@@ -119,7 +124,9 @@ type OrderBook struct {
 	ExchangeTs *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=exchange_ts,json=exchangeTs,proto3" json:"exchange_ts,omitempty"`
 	// When the ingestor received that update, by the ingestor's clock.
 	ReceivedTs *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=received_ts,json=receivedTs,proto3" json:"received_ts,omitempty"`
-	// When the ingestor published this book, by the ingestor's clock.
+	// When the ingestor published this book, by the ingestor's clock. The book was in sync with
+	// the exchange at that time, so consumers measure staleness from it. A keepalive renews it
+	// while exchange_ts and received_ts stay those of the latest update.
 	PublishedTs   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=published_ts,json=publishedTs,proto3" json:"published_ts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

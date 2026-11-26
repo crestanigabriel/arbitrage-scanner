@@ -18,6 +18,7 @@ const (
 	DefaultBookDepth     = 50
 	MaxBookDepth         = 100 // the OrderBook contract limit
 	DefaultThrottle      = 50 * time.Millisecond
+	DefaultKeepalive     = time.Second
 	DefaultSymbols       = "BTC-USD"
 	DefaultNATSURL       = "nats://localhost:4222"
 	DefaultKrakenWSURL   = "wss://ws.kraken.com/v2"
@@ -28,27 +29,29 @@ const (
 
 // Environment variables read by Load.
 const (
-	EnvSymbols        = "SYMBOLS"
-	EnvBookDepth      = "BOOK_DEPTH"
-	EnvBookThrottleMS = "BOOK_THROTTLE_MS"
-	EnvNATSURL        = "NATS_URL"
-	EnvKrakenWSURL    = "KRAKEN_WS_URL"
-	EnvCoinbaseWSURL  = "COINBASE_WS_URL"
-	EnvHTTPAddr       = "HTTP_ADDR"
-	EnvLogLevel       = "LOG_LEVEL"
+	EnvSymbols         = "SYMBOLS"
+	EnvBookDepth       = "BOOK_DEPTH"
+	EnvBookThrottleMS  = "BOOK_THROTTLE_MS"
+	EnvBookKeepaliveMS = "BOOK_KEEPALIVE_MS"
+	EnvNATSURL         = "NATS_URL"
+	EnvKrakenWSURL     = "KRAKEN_WS_URL"
+	EnvCoinbaseWSURL   = "COINBASE_WS_URL"
+	EnvHTTPAddr        = "HTTP_ADDR"
+	EnvLogLevel        = "LOG_LEVEL"
 )
 
 // Variables lists every environment variable Load reads. deploy/ingestor.env documents each
 // of them, and a test keeps the two in step.
 var Variables = []string{
-	EnvSymbols, EnvBookDepth, EnvBookThrottleMS, EnvNATSURL, EnvKrakenWSURL, EnvCoinbaseWSURL,
-	EnvHTTPAddr, EnvLogLevel,
+	EnvSymbols, EnvBookDepth, EnvBookThrottleMS, EnvBookKeepaliveMS, EnvNATSURL, EnvKrakenWSURL,
+	EnvCoinbaseWSURL, EnvHTTPAddr, EnvLogLevel,
 }
 
 // Config is the validated configuration.
 type Config struct {
 	BookDepth     int           // BOOK_DEPTH: levels per side in each published OrderBook
 	BookThrottle  time.Duration // BOOK_THROTTLE_MS: minimum interval between publishes of one book; 0 publishes every update
+	BookKeepalive time.Duration // BOOK_KEEPALIVE_MS: publish an unchanged book again after this long; 0 never does
 	Symbols       []string      // SYMBOLS: comma-separated canonical symbols, e.g. "BTC-USD,ETH-USD"
 	NATSURL       string        // NATS_URL
 	KrakenWSURL   string        // KRAKEN_WS_URL
@@ -100,6 +103,18 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		errs = append(errs, fmt.Errorf("BOOK_THROTTLE_MS: %d is negative", ms))
 	}
 	cfg.BookThrottle = time.Duration(ms) * time.Millisecond
+
+	ms, err = strconv.Atoi(get(EnvBookKeepaliveMS, strconv.FormatInt(DefaultKeepalive.Milliseconds(), 10)))
+	cfg.BookKeepalive = time.Duration(ms) * time.Millisecond
+	switch {
+	case err != nil:
+		errs = append(errs, fmt.Errorf("BOOK_KEEPALIVE_MS: not an integer: %w", err))
+	case ms < 0:
+		errs = append(errs, fmt.Errorf("BOOK_KEEPALIVE_MS: %d is negative", ms))
+	case ms > 0 && cfg.BookKeepalive < cfg.BookThrottle:
+		errs = append(errs, fmt.Errorf("BOOK_KEEPALIVE_MS: %d is shorter than BOOK_THROTTLE_MS (%d): use 0 or at least that",
+			ms, cfg.BookThrottle.Milliseconds()))
+	}
 
 	seen := make(map[string]bool)
 	for s := range strings.SplitSeq(get(EnvSymbols, DefaultSymbols), ",") {
